@@ -20,8 +20,9 @@ type EmbeddingClient struct {
 
 // geminiEmbedRequest is the request body for Gemini embedding API.
 type geminiEmbedRequest struct {
-	Model   string             `json:"model"`
-	Content geminiEmbedContent `json:"content"`
+	Model                string              `json:"model"`
+	Content              geminiEmbedContent  `json:"content"`
+	OutputDimensionality int                 `json:"outputDimensionality,omitempty"`
 }
 
 type geminiEmbedContent struct {
@@ -50,7 +51,7 @@ type geminiError struct {
 func NewEmbeddingClient(apiKey string) *EmbeddingClient {
 	return &EmbeddingClient{
 		apiKey: apiKey,
-		model:  "text-embedding-004", // 768 dimensions, free tier
+		model:  "gemini-embedding-001", // flexible dimensions, free tier
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -73,6 +74,7 @@ func (c *EmbeddingClient) Embed(ctx context.Context, text string) ([]float32, er
 		Content: geminiEmbedContent{
 			Parts: []geminiEmbedPart{{Text: text}},
 		},
+		OutputDimensionality: 768,
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
@@ -147,6 +149,7 @@ func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]f
 			Content: geminiEmbedContent{
 				Parts: []geminiEmbedPart{{Text: text}},
 			},
+			OutputDimensionality: 768,
 		}
 	}
 
