@@ -7,6 +7,7 @@ import (
 	"os/exec"
 
 	"github.com/joeyhipolito/obsidian-cli/internal/config"
+	"github.com/joeyhipolito/obsidian-cli/internal/index"
 )
 
 // DoctorCheck represents a single doctor check result.
@@ -152,13 +153,35 @@ func DoctorCmd(jsonOutput bool) error {
 			}
 		}
 
-		// 6. Check SQLite database
-		// TODO: check if index database exists at vault/.obsidian-cli/index.db
-		checks = append(checks, DoctorCheck{
-			Name:    "Search index",
-			Status:  "warn",
-			Message: "Not yet built. Run 'obsidian index'",
-		})
+		// 6. Check search index
+		if vaultPath != "" {
+			dbPath := index.IndexDBPath(vaultPath)
+			if info, err := os.Stat(dbPath); err != nil {
+				checks = append(checks, DoctorCheck{
+					Name:    "Search index",
+					Status:  "warn",
+					Message: "Not yet built. Run 'obsidian index'",
+				})
+			} else {
+				store, err := index.Open(dbPath)
+				if err != nil {
+					checks = append(checks, DoctorCheck{
+						Name:    "Search index",
+						Status:  "fail",
+						Message: fmt.Sprintf("Cannot open: %v", err),
+					})
+					allOK = false
+				} else {
+					count, _ := store.NoteCount()
+					store.Close()
+					checks = append(checks, DoctorCheck{
+						Name:    "Search index",
+						Status:  "ok",
+						Message: fmt.Sprintf("%d notes indexed (%s, %d bytes)", count, dbPath, info.Size()),
+					})
+				}
+			}
+		}
 	}
 
 	// Determine summary
