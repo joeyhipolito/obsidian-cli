@@ -88,11 +88,7 @@ func run() error {
 		return cmd.ListCmd(vaultPath, dir, jsonOutput)
 
 	case "search":
-		if len(filteredArgs) < 1 {
-			return fmt.Errorf("search requires a query\n\nUsage: obsidian search <query>")
-		}
-		query := strings.Join(filteredArgs, " ")
-		return cmd.SearchCmd(vaultPath, query, jsonOutput)
+		return handleSearchCommand(vaultPath, filteredArgs, jsonOutput)
 
 	case "index":
 		return cmd.IndexCmd(vaultPath, jsonOutput)
@@ -140,6 +136,32 @@ func handleCreateCommand(vaultPath string, args []string, jsonOutput bool) error
 	return cmd.CreateCmd(vaultPath, notePath, title, jsonOutput)
 }
 
+// handleSearchCommand parses and executes the search command.
+func handleSearchCommand(vaultPath string, args []string, jsonOutput bool) error {
+	mode := ""
+	var queryParts []string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--mode":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--mode requires an argument (keyword, semantic, or hybrid)")
+			}
+			mode = args[i+1]
+			i++
+		default:
+			queryParts = append(queryParts, args[i])
+		}
+	}
+
+	if len(queryParts) == 0 {
+		return fmt.Errorf("search requires a query\n\nUsage: obsidian search <query> [--mode keyword|semantic|hybrid]")
+	}
+
+	query := strings.Join(queryParts, " ")
+	return cmd.SearchCmd(vaultPath, query, mode, jsonOutput)
+}
+
 func printUsage() {
 	fmt.Printf(`obsidian - Obsidian vault CLI tool (v%s)
 
@@ -152,6 +174,7 @@ COMMANDS:
     create <path>           Create a new note
     list [dir]              List notes in vault or directory
     search <query>          Search notes (keyword + semantic)
+                            --mode keyword|semantic|hybrid (default: hybrid)
     index                   Build/update the search index
     configure               Set up API key and vault path
     configure show          Show current configuration
@@ -174,7 +197,9 @@ EXAMPLES:
     obsidian append daily/2026-02-07.md "New task"  # Append to note
     obsidian create projects/new-idea.md            # Create a note
     obsidian list daily/                            # List notes in folder
-    obsidian search "project ideas"                 # Search notes
+    obsidian search "project ideas"                 # Hybrid search (default)
+    obsidian search "golang" --mode keyword         # Keyword-only search
+    obsidian search "similar to my notes" --mode semantic  # Semantic search
     obsidian index                                  # Build search index
     obsidian doctor                                 # Check setup
 
