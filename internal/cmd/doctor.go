@@ -1,13 +1,13 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 
 	"github.com/joeyhipolito/obsidian-cli/internal/config"
 	"github.com/joeyhipolito/obsidian-cli/internal/index"
+	"github.com/joeyhipolito/obsidian-cli/internal/output"
 )
 
 // DoctorCheck represents a single doctor check result.
@@ -108,7 +108,7 @@ func DoctorCmd(jsonOutput bool) error {
 			})
 			allOK = false
 		} else {
-			masked := apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+			masked := maskKey(apiKey)
 			checks = append(checks, DoctorCheck{
 				Name:    "Gemini API key",
 				Status:  "ok",
@@ -198,14 +198,11 @@ func DoctorCmd(jsonOutput bool) error {
 
 	// JSON output
 	if jsonOutput {
-		o := DoctorOutput{
+		return output.JSON(DoctorOutput{
 			Checks:  checks,
 			Summary: summary,
 			AllOK:   allOK,
-		}
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(o)
+		})
 	}
 
 	// Human-readable output

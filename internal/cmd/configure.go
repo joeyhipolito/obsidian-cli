@@ -2,12 +2,12 @@ package cmd
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/joeyhipolito/obsidian-cli/internal/config"
+	"github.com/joeyhipolito/obsidian-cli/internal/output"
 )
 
 // ConfigureCmd runs an interactive configuration setup.
@@ -40,8 +40,7 @@ func ConfigureCmd() error {
 	fmt.Println("https://aistudio.google.com/api-keys")
 	fmt.Println()
 	if existing.GeminiAPIKey != "" {
-		masked := existing.GeminiAPIKey[:4] + "..." + existing.GeminiAPIKey[len(existing.GeminiAPIKey)-4:]
-		fmt.Printf("Gemini API Key [%s]: ", masked)
+		fmt.Printf("Gemini API Key [%s]: ", maskKey(existing.GeminiAPIKey))
 	} else {
 		fmt.Print("Gemini API Key: ")
 	}
@@ -121,29 +120,29 @@ func ConfigureShowCmd(jsonOutput bool) error {
 		return nil
 	}
 
-	// Mask API key for display
-	maskedKey := ""
-	if cfg.GeminiAPIKey != "" {
-		if len(cfg.GeminiAPIKey) > 8 {
-			maskedKey = cfg.GeminiAPIKey[:4] + "..." + cfg.GeminiAPIKey[len(cfg.GeminiAPIKey)-4:]
-		} else {
-			maskedKey = "****"
-		}
-	}
+	maskedKey := maskKey(cfg.GeminiAPIKey)
 
 	if jsonOutput {
-		output := map[string]string{
+		return output.JSON(map[string]string{
 			"config_path":   config.Path(),
 			"gemini_apikey": maskedKey,
 			"vault_path":    cfg.VaultPath,
-		}
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(output)
+		})
 	}
 
 	fmt.Printf("Config file: %s\n", config.Path())
 	fmt.Printf("Gemini API key: %s\n", maskedKey)
 	fmt.Printf("Vault path: %s\n", cfg.VaultPath)
 	return nil
+}
+
+// maskKey returns a masked version of an API key for display.
+func maskKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	if len(key) > 8 {
+		return key[:4] + "..." + key[len(key)-4:]
+	}
+	return "****"
 }

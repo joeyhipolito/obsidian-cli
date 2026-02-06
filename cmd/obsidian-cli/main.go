@@ -58,6 +58,10 @@ func run() error {
 		return cmd.ConfigureCmd()
 	case "doctor":
 		return cmd.DoctorCmd(jsonOutput)
+	case "read", "append", "create", "list", "search", "index":
+		// handled below after vault resolution
+	default:
+		return fmt.Errorf("unknown command: %s\n\nRun 'obsidian --help' for usage", subcommand)
 	}
 
 	// Resolve vault path
@@ -92,10 +96,9 @@ func run() error {
 
 	case "index":
 		return cmd.IndexCmd(vaultPath, jsonOutput)
-
-	default:
-		return fmt.Errorf("unknown command: %s\n\nRun 'obsidian --help' for usage", subcommand)
 	}
+
+	return nil
 }
 
 // handleAppendCommand parses and executes the append command.
