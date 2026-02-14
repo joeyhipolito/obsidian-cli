@@ -1,0 +1,21 @@
+{
+  "name": "obsidian",
+  "description": "Reads, writes, searches, and indexes Obsidian vault notes via obsidian CLI",
+  "author": "joeyhipolito",
+  "version": "1.0.0",
+  "category": "integration",
+  "format": "agent-skills",
+  "standard": "agentskills.io",
+  "compatible": ["claude-code", "cursor", "npx-skills", "gemini-cli"],
+  "tags": ["obsidian", "notes", "vault", "markdown"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joeyhipolito/obsidian"
+  },
+  "installation": {
+    "methods": [
+      "npx skills i joeyhipolito/obsidian",
+      "cp -r .claude/skills/obsidian ~/.claude/skills/"
+    ]
+  }
+}

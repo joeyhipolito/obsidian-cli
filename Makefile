@@ -1,7 +1,7 @@
 # obsidian-cli Makefile
 # CLI tool for reading, writing, searching, and indexing Obsidian vault notes
 
-.PHONY: all build install test clean help
+.PHONY: all build install test clean help skill-sync
 
 # Binary name
 BINARY_NAME=obsidian
@@ -117,3 +117,13 @@ help:
 	@echo "  make test"
 	@echo "  make run ARGS='read daily/2026-02-07.md'"
 	@echo "  make run ARGS='search \"project ideas\"'"
+	@echo "  make skill-sync     Sync SKILL.md to via plugin"
+
+# Sync skill to via plugin
+VIA_PLUGIN_DIR=$(HOME)/via/plugins/$(BINARY_NAME)
+
+skill-sync:
+	@echo "Syncing SKILL.md to via plugin..."
+	@mkdir -p $(VIA_PLUGIN_DIR)/skills/$(BINARY_NAME)/
+	@ln -sf $(CURDIR)/.claude/skills/$(BINARY_NAME)/SKILL.md $(VIA_PLUGIN_DIR)/skills/$(BINARY_NAME)/SKILL.md
+	@echo "Symlink created: $(VIA_PLUGIN_DIR)/skills/$(BINARY_NAME)/SKILL.md → $(CURDIR)/.claude/skills/$(BINARY_NAME)/SKILL.md"

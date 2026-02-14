@@ -243,7 +243,7 @@ func (s *Store) SearchSemantic(queryEmbedding []float32, limit int) ([]SearchRes
 			continue
 		}
 
-		score := cosineSimilarity(queryEmbedding, emb)
+		score := CosineSimilarity(queryEmbedding, emb)
 		if score > 0 {
 			results = append(results, SearchResult{
 				Path:  path,
@@ -346,9 +346,9 @@ func decodeEmbedding(b []byte) []float32 {
 	return v
 }
 
-// cosineSimilarity calculates the cosine similarity between two vectors.
+// CosineSimilarity calculates the cosine similarity between two vectors.
 // Returns a value between -1 and 1, where 1 means identical.
-func cosineSimilarity(a, b []float32) float32 {
+func CosineSimilarity(a, b []float32) float32 {
 	if len(a) != len(b) || len(a) == 0 {
 		return 0
 	}
@@ -377,6 +377,34 @@ func sqrt32(x float32) float32 {
 		z = (z + x/z) / 2
 	}
 	return z
+}
+
+// GetAllNoteRows returns all indexed notes with their metadata and embeddings.
+func (s *Store) GetAllNoteRows() ([]NoteRow, error) {
+	rows, err := s.db.Query("SELECT path, title, tags, headings, wikilinks, body, mod_time, embedding FROM notes")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteRow
+	for rows.Next() {
+		var n NoteRow
+		var embBlob []byte
+		if err := rows.Scan(&n.Path, &n.Title, &n.Tags, &n.Headings, &n.Wikilinks, &n.Body, &n.ModTime, &embBlob); err != nil {
+			return nil, err
+		}
+		n.Embedding = decodeEmbedding(embBlob)
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
+// EmbeddingCount returns the number of notes that have embeddings.
+func (s *Store) EmbeddingCount() (int, error) {
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM notes WHERE embedding IS NOT NULL").Scan(&count)
+	return count, err
 }
 
 // IndexDBPath returns the path to the index database for a given vault.

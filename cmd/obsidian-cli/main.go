@@ -49,6 +49,36 @@ func run() error {
 		}
 	}
 
+	// Extract additional flags
+	dryRun := false
+	forceFlag := false
+	applyFlag := false
+	fixFlag := false
+	staleDays := 30
+	var cleanedArgs []string
+	for i := 0; i < len(filteredArgs); i++ {
+		switch filteredArgs[i] {
+		case "--dry-run":
+			dryRun = true
+		case "--force":
+			forceFlag = true
+		case "--apply":
+			applyFlag = true
+		case "--fix":
+			fixFlag = true
+		case "--stale-days":
+			if i+1 < len(filteredArgs) {
+				if n, err := parseInt(filteredArgs[i+1]); err == nil {
+					staleDays = n
+				}
+				i++
+			}
+		default:
+			cleanedArgs = append(cleanedArgs, filteredArgs[i])
+		}
+	}
+	filteredArgs = cleanedArgs
+
 	// Commands that don't require config
 	switch subcommand {
 	case "configure":
@@ -58,7 +88,7 @@ func run() error {
 		return cmd.ConfigureCmd()
 	case "doctor":
 		return cmd.DoctorCmd(jsonOutput)
-	case "read", "append", "create", "list", "search", "index":
+	case "read", "append", "create", "list", "search", "index", "sync", "enrich", "maintain":
 		// handled below after vault resolution
 	default:
 		return fmt.Errorf("unknown command: %s\n\nRun 'obsidian --help' for usage", subcommand)
@@ -96,9 +126,34 @@ func run() error {
 
 	case "index":
 		return cmd.IndexCmd(vaultPath, jsonOutput)
+
+	case "sync":
+		websitePath := config.ResolveWebsitePath()
+		if websitePath == "" {
+			return fmt.Errorf("no website path configured\n\nSet website_path in ~/.obsidian/config or OBSIDIAN_WEBSITE_PATH env var")
+		}
+		return cmd.SyncCmd(vaultPath, websitePath, dryRun, forceFlag, jsonOutput)
+
+	case "enrich":
+		return cmd.EnrichCmd(vaultPath, applyFlag, jsonOutput)
+
+	case "maintain":
+		return cmd.MaintainCmd(vaultPath, staleDays, fixFlag, jsonOutput)
 	}
 
 	return nil
+}
+
+// parseInt parses a string to int, returning an error if invalid.
+func parseInt(s string) (int, error) {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("not a number: %s", s)
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, nil
 }
 
 // handleAppendCommand parses and executes the append command.
@@ -179,6 +234,14 @@ COMMANDS:
     search <query>          Search notes (keyword + semantic)
                             --mode keyword|semantic|hybrid (default: hybrid)
     index                   Build/update the search index
+    sync                    Sync website content metadata into vault
+                            --dry-run  Preview without writing
+                            --force    Overwrite unchanged + include unpublished
+    enrich                  Suggest links, tags, detect orphan notes
+                            --apply    Write suggested links to notes
+    maintain                Vault health checks and reporting
+                            --stale-days N  Days before note is stale (default: 30)
+                            --fix           Add frontmatter to notes missing it
     configure               Set up API key and vault path
     configure show          Show current configuration
     doctor                  Validate installation and configuration
@@ -202,8 +265,12 @@ EXAMPLES:
     obsidian list daily/                            # List notes in folder
     obsidian search "project ideas"                 # Hybrid search (default)
     obsidian search "golang" --mode keyword         # Keyword-only search
-    obsidian search "similar to my notes" --mode semantic  # Semantic search
     obsidian index                                  # Build search index
+    obsidian sync                                   # Sync website to vault
+    obsidian sync --dry-run                         # Preview sync changes
+    obsidian enrich                                 # Find note connections
+    obsidian enrich --apply                         # Apply suggested links
+    obsidian maintain                               # Vault health report
     obsidian doctor                                 # Check setup
 
 For more information, visit: https://obsidian.md

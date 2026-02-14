@@ -21,6 +21,7 @@ const (
 type Config struct {
 	GeminiAPIKey string
 	VaultPath    string
+	WebsitePath  string
 }
 
 // Path returns the full path to the config file (~/.obsidian/config).
@@ -82,6 +83,8 @@ func Load() (*Config, error) {
 			cfg.GeminiAPIKey = value
 		case "vault_path":
 			cfg.VaultPath = value
+		case "website_path":
+			cfg.WebsitePath = value
 		}
 	}
 
@@ -117,6 +120,11 @@ func Save(cfg *Config) error {
 	b.WriteString("\n")
 	b.WriteString("# Path to your Obsidian vault\n")
 	fmt.Fprintf(&b, "vault_path=%s\n", cfg.VaultPath)
+	if cfg.WebsitePath != "" {
+		b.WriteString("\n")
+		b.WriteString("# Path to your website project (for obsidian sync)\n")
+		fmt.Fprintf(&b, "website_path=%s\n", cfg.WebsitePath)
+	}
 
 	// Write file with 600 permissions
 	if err := os.WriteFile(path, []byte(b.String()), 0600); err != nil {
@@ -166,4 +174,13 @@ func ResolveVaultPath() string {
 		return cfg.VaultPath
 	}
 	return os.Getenv("OBSIDIAN_VAULT_PATH")
+}
+
+// ResolveWebsitePath returns the website path from config or environment.
+func ResolveWebsitePath() string {
+	cfg, err := Load()
+	if err == nil && cfg.WebsitePath != "" {
+		return cfg.WebsitePath
+	}
+	return os.Getenv("OBSIDIAN_WEBSITE_PATH")
 }

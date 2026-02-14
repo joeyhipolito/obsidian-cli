@@ -227,13 +227,13 @@ func TestEmbeddingEncodeDecode(t *testing.T) {
 func TestCosineSimilarity(t *testing.T) {
 	a := []float32{1, 0, 0}
 	b := []float32{1, 0, 0}
-	sim := cosineSimilarity(a, b)
+	sim := CosineSimilarity(a, b)
 	if sim < 0.99 || sim > 1.01 {
 		t.Errorf("identical vectors got similarity %f, want ~1.0", sim)
 	}
 
 	c := []float32{0, 1, 0}
-	sim = cosineSimilarity(a, c)
+	sim = CosineSimilarity(a, c)
 	if sim < -0.01 || sim > 0.01 {
 		t.Errorf("orthogonal vectors got similarity %f, want ~0.0", sim)
 	}
