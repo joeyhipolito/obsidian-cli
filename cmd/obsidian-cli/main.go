@@ -55,6 +55,10 @@ func run() error {
 	applyFlag := false
 	fixFlag := false
 	staleDays := 30
+	ingestSource := ""
+	ingestTopic := ""
+	ingestDomain := ""
+	ingestSince := ""
 	var cleanedArgs []string
 	for i := 0; i < len(filteredArgs); i++ {
 		switch filteredArgs[i] {
@@ -73,6 +77,26 @@ func run() error {
 				}
 				i++
 			}
+		case "--source":
+			if i+1 < len(filteredArgs) {
+				ingestSource = filteredArgs[i+1]
+				i++
+			}
+		case "--topic":
+			if i+1 < len(filteredArgs) {
+				ingestTopic = filteredArgs[i+1]
+				i++
+			}
+		case "--domain":
+			if i+1 < len(filteredArgs) {
+				ingestDomain = filteredArgs[i+1]
+				i++
+			}
+		case "--since":
+			if i+1 < len(filteredArgs) {
+				ingestSince = filteredArgs[i+1]
+				i++
+			}
 		default:
 			cleanedArgs = append(cleanedArgs, filteredArgs[i])
 		}
@@ -88,7 +112,7 @@ func run() error {
 		return cmd.ConfigureCmd()
 	case "doctor":
 		return cmd.DoctorCmd(jsonOutput)
-	case "read", "append", "create", "list", "search", "index", "sync", "enrich", "maintain":
+	case "read", "append", "create", "list", "search", "index", "sync", "enrich", "maintain", "ingest":
 		// handled below after vault resolution
 	default:
 		return fmt.Errorf("unknown command: %s\n\nRun 'obsidian --help' for usage", subcommand)
@@ -139,6 +163,16 @@ func run() error {
 
 	case "maintain":
 		return cmd.MaintainCmd(vaultPath, staleDays, fixFlag, jsonOutput)
+
+	case "ingest":
+		return cmd.IngestCmd(vaultPath, cmd.IngestOptions{
+			Source:     ingestSource,
+			Topic:      ingestTopic,
+			Domain:     ingestDomain,
+			Since:      ingestSince,
+			DryRun:     dryRun,
+			JSONOutput: jsonOutput,
+		})
 	}
 
 	return nil
@@ -242,6 +276,12 @@ COMMANDS:
     maintain                Vault health checks and reporting
                             --stale-days N  Days before note is stale (default: 30)
                             --fix           Add frontmatter to notes missing it
+    ingest                  Import data from external sources into vault
+                            --source scout|learnings  (required)
+                            --topic <name>            Filter scout by topic
+                            --domain <name>           Filter learnings by domain
+                            --since <duration>        e.g. 7d, 24h, 2w
+                            --dry-run                 Preview without writing
     configure               Set up API key and vault path
     configure show          Show current configuration
     doctor                  Validate installation and configuration
@@ -271,6 +311,11 @@ EXAMPLES:
     obsidian enrich                                 # Find note connections
     obsidian enrich --apply                         # Apply suggested links
     obsidian maintain                               # Vault health report
+    obsidian ingest --source scout                  # Import scout intel
+    obsidian ingest --source scout --topic "ai-models" --since 7d
+    obsidian ingest --source learnings              # Import orchestrator learnings
+    obsidian ingest --source learnings --domain dev --since 30d
+    obsidian ingest --source scout --dry-run        # Preview what would be created
     obsidian doctor                                 # Check setup
 
 For more information, visit: https://obsidian.md

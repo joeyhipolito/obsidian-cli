@@ -18,6 +18,7 @@ Read, write, search, and index Obsidian vault notes via the standalone `obsidian
 - User wants to sync website content into the vault
 - User wants to find connections or suggested links between notes
 - User wants a vault health check or to fix broken links/missing frontmatter
+- User wants to import scout intel or orchestrator learnings into the vault
 
 ## Commands
 
@@ -128,6 +129,31 @@ obsidian maintain --fix
 obsidian maintain --json
 ```
 
+### Ingest
+
+Import data from external sources into the vault as structured notes. Deduplicates using `~/.obsidian/ingest-state.json`.
+
+**Scout intel** (from `~/.scout/intel/{topic}/{date}_{source}.json`):
+- Creates notes at `vault/Intel/{topic}/{slug}.md`
+- Frontmatter includes: type, source, topic, url, date, score, tags
+
+**Learnings** (from `~/.via/learnings.db`):
+- Creates notes at `vault/Learnings/{domain}/{type}-{id}.md`
+- Frontmatter includes: domain, learning-type, agent-type, created, seen-count, used-count
+
+```bash
+obsidian ingest --source scout                          # Ingest all scout intel
+obsidian ingest --source scout --topic "ai-models"     # Filter by topic
+obsidian ingest --source scout --since 7d              # Last 7 days only
+obsidian ingest --source learnings                     # Ingest all learnings
+obsidian ingest --source learnings --domain dev        # Filter by domain
+obsidian ingest --source learnings --since 30d         # Last 30 days only
+obsidian ingest --source scout --dry-run               # Preview without writing
+obsidian ingest --source scout --json                  # JSON output
+```
+
+Supported `--since` units: `h` (hours), `d` (days), `w` (weeks). Example: `7d`, `24h`, `2w`.
+
 ### Setup
 
 ```bash
@@ -172,5 +198,14 @@ Or use environment variables: `OBSIDIAN_VAULT_PATH`, `GEMINI_API_KEY`
 
 **User**: "how healthy is my vault"
 **Action**: `obsidian maintain`
+
+**User**: "import my scout intel into my vault"
+**Action**: `obsidian ingest --source scout --dry-run` then `obsidian ingest --source scout`
+
+**User**: "add my recent learnings to Obsidian"
+**Action**: `obsidian ingest --source learnings --since 7d`
+
+**User**: "ingest the last week of ai-models scout intel"
+**Action**: `obsidian ingest --source scout --topic "ai-models" --since 7d`
 
 All commands support `--json` for machine-readable output.
