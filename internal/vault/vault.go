@@ -53,14 +53,25 @@ func WriteNote(vaultPath, notePath, content string) error {
 }
 
 // AppendToNote appends text to an existing note.
-func AppendToNote(vaultPath, notePath, text string) error {
+// When section is non-empty, text is inserted at the end of that section
+// (before the next heading of equal or shallower depth, or end of file).
+// When section is empty, text is appended to the end of the file.
+func AppendToNote(vaultPath, notePath, text, section string) error {
 	fullPath := resolvePath(vaultPath, notePath)
 
-	// Verify file exists
 	if _, err := os.Stat(fullPath); err != nil {
 		return fmt.Errorf("note not found: %s", notePath)
 	}
 
+	if section == "" {
+		return appendToEOF(fullPath, text)
+	}
+	return appendToSection(fullPath, notePath, text, section)
+}
+
+// appendToEOF appends text to the end of the file, ensuring a leading newline
+// if the file does not already end with one.
+func appendToEOF(fullPath, text string) error {
 	f, err := os.OpenFile(fullPath, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("cannot open note: %w", err)
@@ -70,7 +81,6 @@ func AppendToNote(vaultPath, notePath, text string) error {
 	// Ensure text starts on a new line
 	info, _ := f.Stat()
 	if info.Size() > 0 {
-		// Read last byte to check if file ends with newline
 		existing, _ := os.ReadFile(fullPath)
 		if len(existing) > 0 && existing[len(existing)-1] != '\n' {
 			text = "\n" + text
@@ -83,6 +93,91 @@ func AppendToNote(vaultPath, notePath, text string) error {
 
 	if _, err := f.WriteString(text); err != nil {
 		return fmt.Errorf("cannot append to note: %w", err)
+	}
+
+	return nil
+}
+
+// appendToSection inserts text at the end of the named section.
+// The section string must match a heading line exactly (e.g. "## Capture").
+// Text is inserted before the next heading of equal or shallower depth,
+// or at end of file if no such heading exists.
+func appendToSection(fullPath, notePath, text, section string) error {
+	existing, err := os.ReadFile(fullPath)
+	if err != nil {
+		return fmt.Errorf("cannot read note: %w", err)
+	}
+	content := string(existing)
+
+	// Build a list of lines with their byte offsets.
+	type lineSpan struct {
+		start int
+		text  string
+	}
+	var lines []lineSpan
+	i := 0
+	for i < len(content) {
+		start := i
+		nl := strings.IndexByte(content[i:], '\n')
+		if nl == -1 {
+			lines = append(lines, lineSpan{start, content[i:]})
+			break
+		}
+		lines = append(lines, lineSpan{start, content[i : i+nl]})
+		i += nl + 1
+	}
+
+	// Find the section heading.
+	normalized := strings.TrimRight(section, " \t")
+	sectionIdx := -1
+	for idx, l := range lines {
+		if strings.TrimRight(l.text, " \t") == normalized {
+			sectionIdx = idx
+			break
+		}
+	}
+	if sectionIdx == -1 {
+		return fmt.Errorf("section %q not found in %s", section, notePath)
+	}
+
+	// Determine the heading depth.
+	sectionLevel := 0
+	for _, c := range section {
+		if c != '#' {
+			break
+		}
+		sectionLevel++
+	}
+
+	// Find the byte offset at which to insert: the start of the next heading
+	// at equal or shallower depth (fewer #'s), or end of file.
+	insertOffset := len(content)
+	for idx := sectionIdx + 1; idx < len(lines); idx++ {
+		line := strings.TrimRight(lines[idx].text, " \t")
+		if !strings.HasPrefix(line, "#") {
+			continue
+		}
+		level := 0
+		for _, c := range line {
+			if c != '#' {
+				break
+			}
+			level++
+		}
+		// A valid heading requires a space after the # markers.
+		if level > 0 && level < len(line) && line[level] == ' ' && level <= sectionLevel {
+			insertOffset = lines[idx].start
+			break
+		}
+	}
+
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	newContent := content[:insertOffset] + text + content[insertOffset:]
+
+	if err := os.WriteFile(fullPath, []byte(newContent), 0644); err != nil {
+		return fmt.Errorf("cannot write note: %w", err)
 	}
 
 	return nil

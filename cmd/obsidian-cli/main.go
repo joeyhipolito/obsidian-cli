@@ -49,13 +49,14 @@ func run() error {
 		}
 	}
 
-	// Extract additional flags
+	// Extract additional flags that are shared across commands.
+	// Command-specific flags (--section, --title, etc.) are parsed in their handlers.
 	dryRun := false
 	forceFlag := false
 	applyFlag := false
 	fixFlag := false
 	staleDays := 30
-	ingestSource := ""
+	sourceFlag := ""
 	ingestTopic := ""
 	ingestDomain := ""
 	ingestSince := ""
@@ -79,7 +80,7 @@ func run() error {
 			}
 		case "--source":
 			if i+1 < len(filteredArgs) {
-				ingestSource = filteredArgs[i+1]
+				sourceFlag = filteredArgs[i+1]
 				i++
 			}
 		case "--topic":
@@ -112,7 +113,7 @@ func run() error {
 		return cmd.ConfigureCmd()
 	case "doctor":
 		return cmd.DoctorCmd(jsonOutput)
-	case "read", "append", "create", "list", "search", "index", "sync", "enrich", "maintain", "ingest":
+	case "read", "append", "capture", "create", "list", "search", "index", "sync", "enrich", "maintain", "ingest", "triage":
 		// handled below after vault resolution
 	default:
 		return fmt.Errorf("unknown command: %s\n\nRun 'obsidian --help' for usage", subcommand)
@@ -134,6 +135,9 @@ func run() error {
 
 	case "append":
 		return handleAppendCommand(vaultPath, filteredArgs, jsonOutput)
+
+	case "capture":
+		return handleCaptureCommand(vaultPath, filteredArgs, sourceFlag, jsonOutput)
 
 	case "create":
 		return handleCreateCommand(vaultPath, filteredArgs, jsonOutput)
@@ -166,13 +170,16 @@ func run() error {
 
 	case "ingest":
 		return cmd.IngestCmd(vaultPath, cmd.IngestOptions{
-			Source:     ingestSource,
+			Source:     sourceFlag,
 			Topic:      ingestTopic,
 			Domain:     ingestDomain,
 			Since:      ingestSince,
 			DryRun:     dryRun,
 			JSONOutput: jsonOutput,
 		})
+
+	case "triage":
+		return handleTriageCommand(vaultPath, filteredArgs, dryRun, jsonOutput)
 	}
 
 	return nil
@@ -190,42 +197,137 @@ func parseInt(s string) (int, error) {
 	return n, nil
 }
 
+// handleCaptureCommand parses and executes the capture command.
+// The body comes from the first positional argument; --source is already
+// extracted into sourceFlag by the global flag loop.
+func handleCaptureCommand(vaultPath string, args []string, source string, jsonOutput bool) error {
+	body := ""
+	if len(args) > 0 {
+		body = strings.Join(args, " ")
+	}
+	return cmd.CaptureCmd(vaultPath, body, source, jsonOutput)
+}
+
 // handleAppendCommand parses and executes the append command.
 func handleAppendCommand(vaultPath string, args []string, jsonOutput bool) error {
 	if len(args) < 1 {
-		return fmt.Errorf("append requires a note path\n\nUsage: obsidian append <path> <text>\n       echo 'text' | obsidian append <path>")
+		return fmt.Errorf("append requires a note path\n\nUsage: obsidian append <path> [--section <heading>] <text>\n       echo 'text' | obsidian append <path>")
 	}
 	notePath := args[0]
-	text := ""
-	if len(args) > 1 {
-		text = strings.Join(args[1:], " ")
+	section := ""
+	var textParts []string
+
+	remaining := args[1:]
+	for i := 0; i < len(remaining); i++ {
+		switch remaining[i] {
+		case "--section":
+			if i+1 >= len(remaining) {
+				return fmt.Errorf("--section requires an argument")
+			}
+			section = remaining[i+1]
+			i++
+		default:
+			textParts = append(textParts, remaining[i])
+		}
 	}
-	return cmd.AppendCmd(vaultPath, notePath, text, jsonOutput)
+
+	text := strings.Join(textParts, " ")
+	return cmd.AppendCmd(vaultPath, notePath, text, section, jsonOutput)
 }
 
 // handleCreateCommand parses and executes the create command.
 func handleCreateCommand(vaultPath string, args []string, jsonOutput bool) error {
 	if len(args) < 1 {
-		return fmt.Errorf("create requires a note path\n\nUsage: obsidian create <path> [--title <title>]")
+		return fmt.Errorf("create requires a note path\n\nUsage: obsidian create <path> [flags]")
 	}
 	notePath := args[0]
-	title := ""
-	remaining := args[1:]
+	var opts cmd.CreateOptions
 
+	remaining := args[1:]
 	for i := 0; i < len(remaining); i++ {
 		switch remaining[i] {
 		case "--title":
 			if i+1 >= len(remaining) {
 				return fmt.Errorf("--title requires an argument")
 			}
-			title = remaining[i+1]
+			opts.Title = remaining[i+1]
+			i++
+		case "--type":
+			if i+1 >= len(remaining) {
+				return fmt.Errorf("--type requires an argument")
+			}
+			opts.Type = remaining[i+1]
+			i++
+		case "--context-set":
+			if i+1 >= len(remaining) {
+				return fmt.Errorf("--context-set requires an argument")
+			}
+			opts.ContextSet = remaining[i+1]
+			i++
+		case "--status":
+			if i+1 >= len(remaining) {
+				return fmt.Errorf("--status requires an argument")
+			}
+			opts.Status = remaining[i+1]
+			i++
+		case "--summary":
+			if i+1 >= len(remaining) {
+				return fmt.Errorf("--summary requires an argument")
+			}
+			opts.Summary = remaining[i+1]
+			i++
+		case "--tags":
+			if i+1 >= len(remaining) {
+				return fmt.Errorf("--tags requires an argument")
+			}
+			for _, tag := range strings.Split(remaining[i+1], ",") {
+				tag = strings.TrimSpace(tag)
+				if tag != "" {
+					opts.Tags = append(opts.Tags, tag)
+				}
+			}
+			i++
+		case "--template":
+			if i+1 >= len(remaining) {
+				return fmt.Errorf("--template requires an argument")
+			}
+			opts.Template = remaining[i+1]
 			i++
 		default:
 			return fmt.Errorf("unknown flag: %s", remaining[i])
 		}
 	}
 
-	return cmd.CreateCmd(vaultPath, notePath, title, jsonOutput)
+	return cmd.CreateCmd(vaultPath, notePath, opts, jsonOutput)
+}
+
+// handleTriageCommand parses and executes the triage command.
+func handleTriageCommand(vaultPath string, args []string, dryRun, jsonOutput bool) error {
+	opts := cmd.TriageOptions{
+		DryRun:     dryRun,
+		JSONOutput: jsonOutput,
+	}
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--list":
+			opts.List = true
+		case "--auto":
+			opts.Auto = true
+		case "--older":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--older requires an argument (e.g. 7d, 24h)")
+			}
+			opts.Older = args[i+1]
+			i++
+		case "--quiet":
+			opts.Quiet = true
+		default:
+			return fmt.Errorf("unknown triage flag: %s", args[i])
+		}
+	}
+
+	return cmd.TriageCmd(vaultPath, opts)
 }
 
 // handleSearchCommand parses and executes the search command.
@@ -263,7 +365,17 @@ USAGE:
 COMMANDS:
     read <path>             Read a note's content
     append <path> <text>    Append text to a note
+                            --section <heading>  Append inside a named section
+    capture <body>          Create a fleeting note in Inbox/
+                            --source <url>       URL or origin of the capture
     create <path>           Create a new note
+                            --title <title>      Note title (also adds H1 heading)
+                            --type <type>        Frontmatter type field
+                            --context-set <name> Frontmatter context-set field
+                            --status <status>    Frontmatter status field
+                            --summary <text>     Frontmatter summary field
+                            --tags <t1,t2,...>   Comma-separated tags
+                            --template <path>    Vault note to use as body template
     list [dir]              List notes in vault or directory
     search <query>          Search notes (keyword + semantic)
                             --mode keyword|semantic|hybrid (default: hybrid)
@@ -282,6 +394,12 @@ COMMANDS:
                             --domain <name>           Filter learnings by domain
                             --since <duration>        e.g. 7d, 24h, 2w
                             --dry-run                 Preview without writing
+    triage                  Review and process notes in Inbox/
+                            --list           Show pending notes with age (default)
+                            --auto           Classify, enrich, and move each note
+                            --older <dur>    Filter to notes older than duration (e.g. 7d, 24h)
+                            --dry-run        Preview --auto without writing
+                            --quiet          Suppress output when inbox is clear (cron-friendly)
     configure               Set up API key and vault path
     configure show          Show current configuration
     doctor                  Validate installation and configuration
@@ -301,7 +419,13 @@ EXAMPLES:
     obsidian configure                              # First-time setup
     obsidian read daily/2026-02-07.md               # Read a note
     obsidian append daily/2026-02-07.md "New task"  # Append to note
-    obsidian create projects/new-idea.md            # Create a note
+    obsidian append daily/2026-02-07.md --section "## Tasks" "- buy milk"
+    obsidian capture "rough idea about search"      # Quick fleeting note
+    obsidian capture "link worth reading" --source https://example.com
+    echo "piped text" | obsidian capture            # Capture from stdin
+    obsidian create projects/new-idea.md --title "New Idea" --type idea
+    obsidian create projects/new-idea.md --tags "go,cli" --status draft
+    obsidian create projects/new-idea.md --template "99 Templates/idea.md"
     obsidian list daily/                            # List notes in folder
     obsidian search "project ideas"                 # Hybrid search (default)
     obsidian search "golang" --mode keyword         # Keyword-only search
@@ -316,7 +440,17 @@ EXAMPLES:
     obsidian ingest --source learnings              # Import orchestrator learnings
     obsidian ingest --source learnings --domain dev --since 30d
     obsidian ingest --source scout --dry-run        # Preview what would be created
+    obsidian triage                                 # List pending inbox notes
+    obsidian triage --older 7d                      # Only notes older than 7 days
+    obsidian triage --auto                          # Classify and move inbox notes
+    obsidian triage --auto --dry-run                # Preview triage without writing
+    obsidian triage --auto --json                   # Structured output
+    obsidian triage --auto --quiet                  # Cron-friendly: no output when inbox is clear
     obsidian doctor                                 # Check setup
+
+CRON SETUP (run triage hourly, only emails on activity):
+    # crontab -e
+    0 * * * * /usr/local/bin/obsidian triage --auto --quiet 2>&1
 
 For more information, visit: https://obsidian.md
 `, version)

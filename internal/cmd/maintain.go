@@ -14,14 +14,16 @@ import (
 
 // MaintainOutput represents the JSON output format for the maintain command.
 type MaintainOutput struct {
-	Stats        VaultStats    `json:"stats"`
-	StaleNotes   []StaleNote   `json:"stale_notes"`
-	BrokenLinks  []BrokenLink  `json:"broken_links"`
-	EmptyNotes   []string      `json:"empty_notes"`
-	LargeNotes   []LargeNote   `json:"large_notes"`
-	NoFrontmatter []string     `json:"no_frontmatter"`
-	HealthScore  int           `json:"health_score"`
-	Fixed        int           `json:"fixed"`
+	Stats          VaultStats  `json:"stats"`
+	StaleNotes     []StaleNote `json:"stale_notes"`
+	BrokenLinks    []BrokenLink `json:"broken_links"`
+	EmptyNotes     []string    `json:"empty_notes"`
+	LargeNotes     []LargeNote `json:"large_notes"`
+	NoFrontmatter  []string    `json:"no_frontmatter"`
+	InboxPending   int         `json:"inbox_pending"`
+	InboxOldestDays int        `json:"inbox_oldest_days"`
+	HealthScore    int         `json:"health_score"`
+	Fixed          int         `json:"fixed"`
 }
 
 // VaultStats holds overall vault statistics.
@@ -155,6 +157,29 @@ func MaintainCmd(vaultPath string, staleDays int, fix, jsonOutput bool) error {
 		result.Stats.AvgSizeBytes = int(totalSize / int64(len(notes)))
 	}
 
+	// Scan inbox for pending triage
+	inboxDir := filepath.Join(vaultPath, "Inbox")
+	if _, err := os.Stat(inboxDir); err == nil {
+		if inboxNotes, err := vault.ListNotes(vaultPath, "Inbox"); err == nil {
+			for _, info := range inboxNotes {
+				fullPath := filepath.Join(vaultPath, info.Path)
+				data, err := os.ReadFile(fullPath)
+				if err != nil {
+					continue
+				}
+				parsed := vault.ParseNote(string(data))
+				if frontmatterString(parsed.Frontmatter, "status") == "processed" {
+					continue
+				}
+				result.InboxPending++
+				ageDays, _ := computeAge(frontmatterString(parsed.Frontmatter, "created"), info.ModTime, now)
+				if ageDays > result.InboxOldestDays {
+					result.InboxOldestDays = ageDays
+				}
+			}
+		}
+	}
+
 	// Calculate health score
 	result.HealthScore = calculateHealthScore(result)
 
@@ -200,6 +225,13 @@ func calculateHealthScore(r MaintainOutput) int {
 		coverage := float64(r.Stats.IndexedNotes) / float64(r.Stats.TotalNotes) * 100
 		score -= int(100 - coverage)
 	}
+
+	// Inbox backlog: -1 per pending note, capped at -10
+	inboxDeduct := r.InboxPending
+	if inboxDeduct > 10 {
+		inboxDeduct = 10
+	}
+	score -= inboxDeduct
 
 	if score < 0 {
 		score = 0
@@ -290,6 +322,15 @@ func printMaintainReport(result MaintainOutput, fixed bool) {
 		for _, p := range result.NoFrontmatter {
 			fmt.Printf("  - %s\n", p)
 		}
+	}
+
+	// Inbox triage status
+	fmt.Println("\nInbox:")
+	if result.InboxPending == 0 {
+		fmt.Println("  Clear (no notes pending triage)")
+	} else {
+		fmt.Printf("  %d notes pending triage, oldest: %dd  → run: obsidian triage --auto\n",
+			result.InboxPending, result.InboxOldestDays)
 	}
 
 	if fixed && result.Fixed > 0 {

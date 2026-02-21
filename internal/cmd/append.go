@@ -14,11 +14,13 @@ import (
 type AppendOutput struct {
 	Path     string `json:"path"`
 	Appended string `json:"appended"`
+	Section  string `json:"section,omitempty"`
 }
 
 // AppendCmd appends text to an existing note.
 // If text is empty, reads from stdin.
-func AppendCmd(vaultPath, notePath, text string, jsonOutput bool) error {
+// If section is non-empty, inserts at the end of that section instead of EOF.
+func AppendCmd(vaultPath, notePath, text, section string, jsonOutput bool) error {
 	if text == "" {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -30,7 +32,7 @@ func AppendCmd(vaultPath, notePath, text string, jsonOutput bool) error {
 		}
 	}
 
-	if err := vault.AppendToNote(vaultPath, notePath, text); err != nil {
+	if err := vault.AppendToNote(vaultPath, notePath, text, section); err != nil {
 		return err
 	}
 
@@ -38,9 +40,14 @@ func AppendCmd(vaultPath, notePath, text string, jsonOutput bool) error {
 		return output.JSON(AppendOutput{
 			Path:     notePath,
 			Appended: text,
+			Section:  section,
 		})
 	}
 
-	fmt.Printf("Appended to %s\n", notePath)
+	if section != "" {
+		fmt.Printf("Appended to %s (section: %s)\n", notePath, section)
+	} else {
+		fmt.Printf("Appended to %s\n", notePath)
+	}
 	return nil
 }

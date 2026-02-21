@@ -28,7 +28,7 @@ func SyncCmd(vaultPath, websitePath string, dryRun, force, jsonOutput bool) erro
 		return fmt.Errorf("failed to scan website: %w", err)
 	}
 
-	targetBase := filepath.Join(vaultPath, "20 Projects", "Website")
+	targetBase := filepath.Join(vaultPath, "Projects", "Website")
 	stats := SyncOutput{
 		Source: filepath.Join(websitePath, "content"),
 		Target: targetBase,

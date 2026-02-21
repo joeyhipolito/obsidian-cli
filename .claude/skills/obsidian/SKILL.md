@@ -2,6 +2,10 @@
 name: obsidian
 description: Reads, writes, searches, and indexes Obsidian vault notes via obsidian CLI. Use when user asks about notes, vault, daily notes, or wants to find/create/update markdown files.
 allowed-tools: Bash(obsidian:*)
+argument-hint: "[note-path or query]"
+keywords: obsidian, vault, notes, markdown, search, embeddings, capture, triage, inbox
+category: integration
+version: "1.0.0"
 ---
 
 # Obsidian - Vault Notes
@@ -11,156 +15,222 @@ Read, write, search, and index Obsidian vault notes via the standalone `obsidian
 ## When to Use
 
 - User mentions notes, vault, daily notes, or Obsidian
+- User wants to capture a quick thought, link, or idea into the inbox
+- User wants to process or triage inbox notes into the correct vault folder
 - User wants to find a note by content or topic
 - User wants to read, create, or append to a note
 - User asks "what notes do I have about X"
 - User wants to update their daily note
-- User wants to sync website content into the vault
-- User wants to find connections or suggested links between notes
-- User wants a vault health check or to fix broken links/missing frontmatter
-- User wants to import scout intel or orchestrator learnings into the vault
+- User wants to check vault health or diagnose setup issues
+
+## Capture → Triage → Connect Workflow
+
+The standard workflow for creating notes:
+
+1. **Capture** — dump thought into `Inbox/` instantly; no folder decision needed
+2. **Triage** — classify and move inbox notes to the correct folder automatically
+3. **Connect** — search and link related notes
 
 ## Commands
+
+### Capture (Inbox)
+
+Creates a `type: fleeting` note in `Inbox/` with a timestamp filename. No folder decision required at capture time.
+
+```bash
+# Capture a quick idea or thought
+obsidian capture "rough idea about search indexing"
+
+# Capture with a source URL or origin label
+obsidian capture "link worth reading" --source https://example.com
+obsidian capture "from the standup meeting" --source mission
+
+# Capture from stdin (piped content)
+echo "piped text" | obsidian capture
+
+# JSON output — returns the created path
+obsidian capture "my idea" --json
+```
+
+**Output frontmatter set by capture:**
+```yaml
+type: fleeting
+created: 2026-02-21
+source: <value of --source, if provided>
+```
+
+### Triage (Process Inbox)
+
+Review and process notes in `Inbox/`. Default mode (no flags) lists pending notes.
+
+```bash
+# List pending inbox notes with age (default)
+obsidian triage
+
+# Filter to notes older than a duration (7d, 24h, 2w)
+obsidian triage --older 7d
+
+# Classify, enrich with wikilinks, and move each inbox note
+obsidian triage --auto
+
+# Preview what --auto would do without writing
+obsidian triage --auto --dry-run
+
+# Structured JSON output
+obsidian triage --auto --json
+
+# Cron-friendly: no output when inbox is clear; errors still surface
+obsidian triage --auto --quiet
+```
+
+**Auto-triage type → destination mapping:**
+
+| Classified type | Destination folder |
+|---|---|
+| `idea` | `Ideas/` |
+| `task` | `Tasks/` |
+| `reference` | `References/` |
+| `note` | `Notes/` |
+
+**Classification rules (in priority order):**
+1. Existing non-`fleeting` type in frontmatter → preserved as-is
+2. Checkbox items or `TODO:` / `action:` / `followup` in body → `task`
+3. `source:` URL or inline `https://` URL → `reference`
+4. Two or more headings → `note`
+5. Default → `idea`
+
+**Frontmatter set by `--auto`:**
+```yaml
+type: <classified-type>
+status: processed
+triaged: 2026-02-21
+```
+
+**Cron setup** (hourly, emails only on activity):
+```
+0 * * * * /usr/local/bin/obsidian triage --auto --quiet 2>&1
+```
+
+### Create
+
+Create a new note with rich frontmatter. All flags are optional.
+
+```bash
+# Minimal: create a note (empty body)
+obsidian create "path/to/note"
+
+# With title (also adds an H1 heading to the body)
+obsidian create "path/to/note" --title "My Note"
+
+# Full frontmatter flags
+obsidian create "Projects/my-idea" \
+  --title "My Idea" \
+  --type idea \
+  --status draft \
+  --summary "One-line description" \
+  --tags "go,cli,search" \
+  --context-set personal
+
+# Clone body from an existing vault note as a template
+obsidian create "path/to/note" --template "System/Templates/idea.md"
+```
+
+**Available `--create` flags:**
+
+| Flag | Description |
+|---|---|
+| `--title <title>` | Sets `title:` in frontmatter and adds `# Title` H1 heading |
+| `--type <type>` | Sets `type:` in frontmatter (e.g. `idea`, `note`, `task`, `reference`) |
+| `--status <status>` | Sets `status:` in frontmatter (e.g. `draft`, `active`, `archived`) |
+| `--summary <text>` | Sets `summary:` in frontmatter |
+| `--tags <t1,t2>` | Sets `tags:` list in frontmatter (comma-separated) |
+| `--context-set <name>` | Sets `context-set:` in frontmatter |
+| `--template <path>` | Uses a vault note's body as the template for the new note |
+
+### Append
+
+Append text to an existing note, optionally inside a named section.
+
+```bash
+# Append to end of note
+obsidian append "path/to/note" "Text to append"
+
+# Append inside a specific section (inserts before the next heading)
+obsidian append "path/to/note" --section "## Tasks" "- buy milk"
+obsidian append "Daily/2026/02/2026-02-21" --section "## Capture" "New entry"
+
+# Append from stdin
+echo "piped content" | obsidian append "path/to/note"
+```
 
 ### Read & List
 
 ```bash
-obsidian read "path/to/note"              # Read note with parsed frontmatter
-obsidian read "path/to/note" --json       # JSON with frontmatter, headings, wikilinks
-obsidian list                             # List all notes in vault
-obsidian list "subfolder"                 # List notes in subdirectory
-obsidian list --json                      # JSON output with metadata
-```
+# Read note with parsed body (frontmatter stripped, shown as header)
+obsidian read "path/to/note"
 
-### Write & Create
+# JSON with full frontmatter, headings, wikilinks, body
+obsidian read "path/to/note" --json
 
-```bash
-# Create a new note
-obsidian create "path/to/note" --title "My Note"
+# List all notes in vault
+obsidian list
 
-# Append text to existing note
-obsidian append "path/to/note" "Text to append"
+# List notes in a subdirectory
+obsidian list "Inbox"
+obsidian list "Projects"
 
-# Append under a specific section
-obsidian append "path/to/note" --section "## Capture" "New entry"
-
-# Pipe content from stdin
-echo "piped content" | obsidian append "path/to/note"
+# JSON output with path metadata
+obsidian list --json
+obsidian list "Projects" --json
 ```
 
 ### Search
 
 ```bash
-# Hybrid search (default — combines keyword + semantic)
+# Hybrid search — combines keyword (FTS5) + semantic (vector) results (default)
 obsidian search "query terms"
 
-# Keyword only (FTS5, exact matches)
+# Keyword-only search (FTS5, exact matches, fast)
 obsidian search "query" --mode keyword
 
-# Semantic only (vector similarity, conceptual matches)
+# Semantic-only search (vector similarity, conceptual matches)
 obsidian search "query" --mode semantic
 
-# JSON output with scores
+# JSON output with relevance scores
 obsidian search "query" --json
 ```
 
 ### Index
 
+Build or update the search index. Required before semantic search works.
+
 ```bash
-# Build/update search index (incremental — only re-indexes changed files)
+# Incremental — only re-indexes notes changed since last run
 obsidian index
 
-# Full re-index
+# Full re-index — reprocesses all notes
 obsidian index --force
 ```
 
-### Sync
+### Doctor
 
-Sync website MDX content metadata into the Obsidian vault as note stubs under `20 Projects/Website/`. Compares modification times and only updates changed files.
-
-```bash
-# Sync website content into vault (incremental)
-obsidian sync
-
-# Preview what would change without writing
-obsidian sync --dry-run
-
-# Force overwrite unchanged notes and include unpublished content
-obsidian sync --force
-
-# JSON output with created/updated/unchanged/skipped lists
-obsidian sync --json
-```
-
-Requires `website_path` in `~/.obsidian/config` or `OBSIDIAN_WEBSITE_PATH` env var.
-
-### Enrich
-
-Analyze the vault index to suggest wikilinks between semantically similar notes, recommend tags via consensus from neighbors, and detect orphan notes with no incoming links.
+Validate installation and configuration. Run this first when troubleshooting.
 
 ```bash
-# Show link suggestions, tag suggestions, and orphan notes
-obsidian enrich
+# Human-readable health check
+obsidian doctor
 
-# Apply suggested wikilinks to notes (appends to Related Notes section)
-obsidian enrich --apply
-
-# JSON output with similarity scores
-obsidian enrich --json
+# JSON output (for scripting)
+obsidian doctor --json
 ```
 
-Requires a built index (`obsidian index` first).
-
-### Maintain
-
-Run vault health checks: stale notes, broken wikilinks, empty notes, large notes (>10KB), missing frontmatter, and index coverage. Outputs a 0-100 health score.
-
-```bash
-# Full vault health report
-obsidian maintain
-
-# Custom staleness threshold (default: 30 days)
-obsidian maintain --stale-days 60
-
-# Auto-fix: add empty frontmatter to notes missing it
-obsidian maintain --fix
-
-# JSON output with all health data
-obsidian maintain --json
-```
-
-### Ingest
-
-Import data from external sources into the vault as structured notes. Deduplicates using `~/.obsidian/ingest-state.json`.
-
-**Scout intel** (from `~/.scout/intel/{topic}/{date}_{source}.json`):
-- Creates notes at `vault/Intel/{topic}/{slug}.md`
-- Frontmatter includes: type, source, topic, url, date, score, tags
-
-**Learnings** (from `~/.via/learnings.db`):
-- Creates notes at `vault/Learnings/{domain}/{type}-{id}.md`
-- Frontmatter includes: domain, learning-type, agent-type, created, seen-count, used-count
-
-```bash
-obsidian ingest --source scout                          # Ingest all scout intel
-obsidian ingest --source scout --topic "ai-models"     # Filter by topic
-obsidian ingest --source scout --since 7d              # Last 7 days only
-obsidian ingest --source learnings                     # Ingest all learnings
-obsidian ingest --source learnings --domain dev        # Filter by domain
-obsidian ingest --source learnings --since 30d         # Last 30 days only
-obsidian ingest --source scout --dry-run               # Preview without writing
-obsidian ingest --source scout --json                  # JSON output
-```
-
-Supported `--since` units: `h` (hours), `d` (days), `w` (weeks). Example: `7d`, `24h`, `2w`.
-
-### Setup
-
-```bash
-obsidian configure            # Interactive setup (vault path, API key)
-obsidian configure show       # Show current config
-obsidian doctor               # Health checks (config, vault, index, API)
-```
+**Doctor checks:**
+- Binary path and version
+- Config file presence and permissions (`~/.obsidian/config`, must be 600)
+- Gemini API key presence
+- Vault path existence
+- Search index (note count, file size)
+- Inbox backlog (pending triage count, age of oldest note)
 
 ## Configuration
 
@@ -175,37 +245,40 @@ Or use environment variables: `OBSIDIAN_VAULT_PATH`, `GEMINI_API_KEY`
 
 ## Examples
 
+**User**: "capture this idea: use RRF for hybrid search ranking"
+**Action**: `obsidian capture "use RRF for hybrid search ranking"`
+
+**User**: "capture this link for later reading" + URL
+**Action**: `obsidian capture "interesting article on Go concurrency" --source https://example.com/article`
+
+**User**: "process my inbox"
+**Action**: `obsidian triage --auto`
+
+**User**: "what's pending in my inbox?"
+**Action**: `obsidian triage`
+
+**User**: "add to my daily note: finished thesis chapter 3"
+**Action**: `obsidian append "Daily/2026/02/2026-02-21" "- Finished thesis chapter 3"`
+
+**User**: "add a task under the Tasks section of today's note"
+**Action**: `obsidian append "Daily/2026/02/2026-02-21" --section "## Tasks" "- [ ] Review PR #42"`
+
+**User**: "create a new meeting note"
+**Action**: `obsidian create "Meetings/2026-02-21 — Team Sync" --title "Team Sync" --type note --status draft`
+
 **User**: "what notes do I have about routines"
 **Action**: `obsidian search "routines"` or `obsidian search "household routines" --mode semantic`
 
-**User**: "add to my daily note: finished thesis chapter 3"
-**Action**: `obsidian append "40 Time/Daily/2026/02/2026-02-07" "- Finished thesis chapter 3"`
-
-**User**: "create a new meeting note"
-**Action**: `obsidian create "10 Work/Meetings/2026-02-07 — Team Sync" --title "Team Sync"`
-
 **User**: "show me my hub files"
-**Action**: `obsidian list "10 Active/Hubs"`
+**Action**: `obsidian list "Hubs"`
 
 **User**: "read my personal context"
-**Action**: `obsidian read "90 System/Organization Files/Personal Context — Joey Hipolito"`
+**Action**: `obsidian read "System/Personal Context — Joey Hipolito"`
 
-**User**: "sync my website content to the vault"
-**Action**: `obsidian sync` or `obsidian sync --dry-run` to preview first
+**User**: "is my obsidian setup working?"
+**Action**: `obsidian doctor`
 
-**User**: "find connections between my notes"
-**Action**: `obsidian enrich` then `obsidian enrich --apply` to write the links
-
-**User**: "how healthy is my vault"
-**Action**: `obsidian maintain`
-
-**User**: "import my scout intel into my vault"
-**Action**: `obsidian ingest --source scout --dry-run` then `obsidian ingest --source scout`
-
-**User**: "add my recent learnings to Obsidian"
-**Action**: `obsidian ingest --source learnings --since 7d`
-
-**User**: "ingest the last week of ai-models scout intel"
-**Action**: `obsidian ingest --source scout --topic "ai-models" --since 7d`
+**User**: "rebuild the search index"
+**Action**: `obsidian index --force`
 
 All commands support `--json` for machine-readable output.

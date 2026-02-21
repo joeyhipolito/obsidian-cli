@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"time"
 
 	"github.com/joeyhipolito/obsidian-cli/internal/config"
 	"github.com/joeyhipolito/obsidian-cli/internal/index"
 	"github.com/joeyhipolito/obsidian-cli/internal/output"
+	"github.com/joeyhipolito/obsidian-cli/internal/vault"
 )
 
 // DoctorCheck represents a single doctor check result.
@@ -182,6 +185,11 @@ func DoctorCmd(jsonOutput bool) error {
 				}
 			}
 		}
+
+		// 7. Check inbox triage status
+		if vaultPath != "" {
+			checks = append(checks, checkInboxStatus(vaultPath))
+		}
 	}
 
 	// Determine summary
@@ -232,4 +240,60 @@ func DoctorCmd(jsonOutput bool) error {
 	}
 
 	return nil
+}
+
+// checkInboxStatus returns a DoctorCheck describing how many notes are pending
+// triage in the Inbox/ folder and how old the oldest one is.
+func checkInboxStatus(vaultPath string) DoctorCheck {
+	inboxPath := filepath.Join(vaultPath, "Inbox")
+	if _, err := os.Stat(inboxPath); os.IsNotExist(err) {
+		return DoctorCheck{
+			Name:    "Inbox",
+			Status:  "ok",
+			Message: "no inbox folder (Inbox/ not found)",
+		}
+	}
+
+	notes, err := vault.ListNotes(vaultPath, "Inbox")
+	if err != nil {
+		return DoctorCheck{
+			Name:    "Inbox",
+			Status:  "warn",
+			Message: fmt.Sprintf("cannot read inbox: %v", err),
+		}
+	}
+
+	now := time.Now()
+	pending := 0
+	oldestDays := 0
+
+	for _, info := range notes {
+		fullPath := filepath.Join(vaultPath, info.Path)
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			continue
+		}
+		parsed := vault.ParseNote(string(data))
+		if frontmatterString(parsed.Frontmatter, "status") == "processed" {
+			continue
+		}
+		pending++
+		ageDays, _ := computeAge(frontmatterString(parsed.Frontmatter, "created"), info.ModTime, now)
+		if ageDays > oldestDays {
+			oldestDays = ageDays
+		}
+	}
+
+	if pending == 0 {
+		return DoctorCheck{
+			Name:    "Inbox",
+			Status:  "ok",
+			Message: "clear",
+		}
+	}
+	return DoctorCheck{
+		Name:    "Inbox",
+		Status:  "warn",
+		Message: fmt.Sprintf("%d notes pending triage, oldest: %dd", pending, oldestDays),
+	}
 }
