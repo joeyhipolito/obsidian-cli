@@ -201,6 +201,20 @@ func parseInt(s string) (int, error) {
 // The body comes from the first positional argument; --source is already
 // extracted into sourceFlag by the global flag loop.
 func handleCaptureCommand(vaultPath string, args []string, source string, jsonOutput bool) error {
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" {
+			fmt.Print(`Usage: obsidian capture <body> [--source <url>]
+       echo 'text' | obsidian capture
+
+Options:
+  --source <url>   URL or origin of the capture
+  --json           Output in JSON format
+  --help, -h       Show this help
+`)
+			return nil
+		}
+	}
+
 	body := ""
 	if len(args) > 0 {
 		body = strings.Join(args, " ")
