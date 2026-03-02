@@ -1,5 +1,6 @@
 // Package config handles reading and writing the Obsidian CLI configuration file.
 // Configuration is stored in ~/.obsidian/config in INI-style format.
+// Set OBSIDIAN_CONFIG_DIR to override the default config directory location.
 package config
 
 import (
@@ -15,6 +16,8 @@ const (
 	ConfigDir = ".obsidian"
 	// ConfigFile is the configuration file name.
 	ConfigFile = "config"
+	// ConfigDirEnv is the environment variable that overrides the config directory.
+	ConfigDirEnv = "OBSIDIAN_CONFIG_DIR"
 )
 
 // Config represents the Obsidian CLI configuration.
@@ -24,60 +27,99 @@ type Config struct {
 	WebsitePath  string
 }
 
-// Path returns the full path to the config file (~/.obsidian/config).
-func Path() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ConfigDir, ConfigFile)
+// Store manages the obsidian config directory and file.
+// It checks the configured env var to allow overriding the default location.
+type Store struct {
+	envVar string
 }
 
-// Dir returns the full path to the config directory (~/.obsidian/).
-func Dir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ConfigDir)
+// NewStoreWithEnv creates a Store that checks envVar for the config directory path.
+// If the env var is set, its value is used as the config directory instead of ~/.obsidian.
+// This preserves backward compatibility: callers without the env var behave identically.
+func NewStoreWithEnv(envVar string) *Store {
+	return &Store{envVar: envVar}
 }
 
-// Load reads the configuration from ~/.obsidian/config.
+// defaultStore is used by package-level functions.
+var defaultStore = NewStoreWithEnv(ConfigDirEnv)
+
+// Dir returns the config directory path.
+// If the env var is set, that path is returned; otherwise returns ~/.obsidian.
+func (s *Store) Dir() (string, error) {
+	if s.envVar != "" {
+		if d := os.Getenv(s.envVar); d != "" {
+			return d, nil
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("getting home directory: %w", err)
+	}
+	return filepath.Join(home, ConfigDir), nil
+}
+
+// Path returns the full path to the config file.
+func (s *Store) Path() (string, error) {
+	dir, err := s.Dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, ConfigFile), nil
+}
+
+// Exists returns true if the config file exists.
+func (s *Store) Exists() bool {
+	p, err := s.Path()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(p)
+	return err == nil
+}
+
+// Permissions returns the file permissions of the config file.
+func (s *Store) Permissions() (os.FileMode, error) {
+	p, err := s.Path()
+	if err != nil {
+		return 0, err
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		return 0, fmt.Errorf("checking config permissions: %w", err)
+	}
+	return info.Mode().Perm(), nil
+}
+
+// Load reads the configuration from the config file.
 // Returns an empty Config (not an error) if the file doesn't exist.
-func Load() (*Config, error) {
-	cfg := &Config{}
-	path := Path()
-	if path == "" {
-		return cfg, nil
+func (s *Store) Load() (*Config, error) {
+	p, err := s.Path()
+	if err != nil {
+		return &Config{}, nil
 	}
 
-	f, err := os.Open(path)
+	f, err := os.Open(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return cfg, nil
+			return &Config{}, nil
 		}
-		return nil, fmt.Errorf("failed to open config file: %w", err)
+		return nil, fmt.Errorf("opening config: %w", err)
 	}
 	defer f.Close()
 
+	cfg := &Config{}
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-
-		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-
-		// Parse key=value
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
 			continue
 		}
-
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
-
 		switch key {
 		case "gemini_apikey":
 			cfg.GeminiAPIKey = value
@@ -87,29 +129,24 @@ func Load() (*Config, error) {
 			cfg.WebsitePath = value
 		}
 	}
-
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, fmt.Errorf("reading config: %w", err)
 	}
-
 	return cfg, nil
 }
 
-// Save writes the configuration to ~/.obsidian/config with proper permissions.
-func Save(cfg *Config) error {
-	dir := Dir()
-	if dir == "" {
-		return fmt.Errorf("cannot determine home directory")
+// Save writes the configuration to the config file with proper permissions.
+func (s *Store) Save(cfg *Config) error {
+	dir, err := s.Dir()
+	if err != nil {
+		return err
 	}
-
-	// Create config directory with 700 permissions
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
+		return fmt.Errorf("creating config directory: %w", err)
 	}
 
-	path := Path()
+	p := filepath.Join(dir, ConfigFile)
 
-	// Build config content
 	var b strings.Builder
 	b.WriteString("# Obsidian CLI Configuration\n")
 	b.WriteString("# Created by: obsidian configure\n")
@@ -126,35 +163,47 @@ func Save(cfg *Config) error {
 		fmt.Fprintf(&b, "website_path=%s\n", cfg.WebsitePath)
 	}
 
-	// Write file with 600 permissions
-	if err := os.WriteFile(path, []byte(b.String()), 0600); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
+	if err := os.WriteFile(p, []byte(b.String()), 0600); err != nil {
+		return fmt.Errorf("writing config: %w", err)
 	}
-
 	return nil
+}
+
+// Package-level functions use defaultStore for backward compatibility.
+
+// Path returns the full path to the config file (~/.obsidian/config).
+// Respects OBSIDIAN_CONFIG_DIR if set.
+func Path() string {
+	p, _ := defaultStore.Path()
+	return p
+}
+
+// Dir returns the full path to the config directory (~/.obsidian/).
+// Respects OBSIDIAN_CONFIG_DIR if set.
+func Dir() string {
+	d, _ := defaultStore.Dir()
+	return d
+}
+
+// Load reads the configuration from the config file.
+// Returns an empty Config (not an error) if the file doesn't exist.
+func Load() (*Config, error) {
+	return defaultStore.Load()
+}
+
+// Save writes the configuration to the config file with proper permissions.
+func Save(cfg *Config) error {
+	return defaultStore.Save(cfg)
 }
 
 // Exists returns true if the config file exists.
 func Exists() bool {
-	path := Path()
-	if path == "" {
-		return false
-	}
-	_, err := os.Stat(path)
-	return err == nil
+	return defaultStore.Exists()
 }
 
 // Permissions returns the file permissions of the config file, or an error.
 func Permissions() (os.FileMode, error) {
-	path := Path()
-	if path == "" {
-		return 0, fmt.Errorf("cannot determine config path")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0, err
-	}
-	return info.Mode().Perm(), nil
+	return defaultStore.Permissions()
 }
 
 // ResolveAPIKey returns the Gemini API key using config priority:
