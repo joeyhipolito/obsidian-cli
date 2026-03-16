@@ -3,6 +3,7 @@ package cmd
 import (
 	"testing"
 
+	"github.com/joeyhipolito/obsidian-cli/internal/index"
 	"github.com/joeyhipolito/obsidian-cli/internal/vault"
 )
 
@@ -185,6 +186,64 @@ func TestFormatAgeLabel(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("formatAgeLabel(%d) = %q, want %q", tt.days, got, tt.want)
 		}
+	}
+}
+
+func TestEnrichSingleNoteFromRows_SortsBySimilarityDescending(t *testing.T) {
+	// unit vector helpers: embed notes as simple unit vectors so cosine
+	// similarity equals the dot product and is easy to reason about.
+	vec := func(v ...float32) []float32 { return v }
+
+	target := "Inbox/target.md"
+	notes := []index.NoteRow{
+		{Path: target, Embedding: vec(1, 0, 0)},
+		// sim ≈ 0.71 — above threshold but lowest of the three candidates
+		{Path: "Notes/low.md", Embedding: vec(1, 1, 0)},   // sim = 1/√2 ≈ 0.707
+		// sim ≈ 0.89 — middle candidate
+		{Path: "Notes/mid.md", Embedding: vec(1, 0.5, 0)}, // sim = 1/√1.25 ≈ 0.894
+		// sim = 1.0 — highest candidate
+		{Path: "Notes/high.md", Embedding: vec(1, 0, 0)},  // sim = 1.0
+		// sim = 0.0 — below threshold, must be excluded
+		{Path: "Notes/none.md", Embedding: vec(0, 1, 0)},
+	}
+
+	got := enrichSingleNoteFromRows(notes, target)
+
+	if len(got) != 3 {
+		t.Fatalf("expected 3 suggestions, got %d", len(got))
+	}
+
+	// Verify descending order: high → mid → low
+	for i := 1; i < len(got); i++ {
+		if got[i].Similarity > got[i-1].Similarity {
+			t.Errorf("suggestions not sorted: got[%d].Similarity=%.4f > got[%d].Similarity=%.4f",
+				i, got[i].Similarity, i-1, got[i-1].Similarity)
+		}
+	}
+
+	if got[0].To != "Notes/high.md" {
+		t.Errorf("expected highest-similarity note first, got %q", got[0].To)
+	}
+}
+
+func TestEnrichSingleNoteFromRows_CapsAtFive(t *testing.T) {
+	vec := func(v ...float32) []float32 { return v }
+
+	target := "Inbox/target.md"
+	notes := []index.NoteRow{
+		{Path: target, Embedding: vec(1, 0)},
+	}
+	// Add 7 candidates all with sim = 1.0 (parallel vectors).
+	for i := 0; i < 7; i++ {
+		notes = append(notes, index.NoteRow{
+			Path:      "Notes/note" + string(rune('a'+i)) + ".md",
+			Embedding: vec(1, 0),
+		})
+	}
+
+	got := enrichSingleNoteFromRows(notes, target)
+	if len(got) != 5 {
+		t.Errorf("expected at most 5 suggestions, got %d", len(got))
 	}
 }
 

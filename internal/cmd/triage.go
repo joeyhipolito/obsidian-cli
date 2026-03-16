@@ -402,15 +402,20 @@ func buildTriagedContent(parsed *vault.Note, noteType string, linksAdded []strin
 }
 
 // enrichSingleNote finds wikilink suggestions for a single note from the index.
-// Returns up to 5 suggestions above a 0.7 cosine similarity threshold.
+// Returns up to 5 suggestions above a 0.7 cosine similarity threshold, sorted
+// by similarity descending (highest-similarity notes first).
 func enrichSingleNote(store *index.Store, notePath string) []LinkSuggestion {
-	const threshold = 0.7
-	const maxLinks = 5
-
 	notes, err := store.GetAllNoteRows()
 	if err != nil {
 		return nil
 	}
+	return enrichSingleNoteFromRows(notes, notePath)
+}
+
+// enrichSingleNoteFromRows is the testable core of enrichSingleNote.
+func enrichSingleNoteFromRows(notes []index.NoteRow, notePath string) []LinkSuggestion {
+	const threshold = 0.7
+	const maxLinks = 5
 
 	// Locate the target note's embedding and its existing wikilinks.
 	var targetEmb []float32
@@ -433,11 +438,9 @@ func enrichSingleNote(store *index.Store, notePath string) []LinkSuggestion {
 
 	targetName := strings.ToLower(strings.TrimSuffix(filepath.Base(notePath), ".md"))
 
+	// Collect all candidates above the threshold first, then sort.
 	var suggestions []LinkSuggestion
 	for _, n := range notes {
-		if len(suggestions) >= maxLinks {
-			break
-		}
 		if n.Path == notePath || n.Embedding == nil {
 			continue
 		}
@@ -457,6 +460,18 @@ func enrichSingleNote(store *index.Store, notePath string) []LinkSuggestion {
 			To:         n.Path,
 			Similarity: sim,
 		})
+	}
+
+	// Sort by similarity descending so the highest-scoring notes come first.
+	for i := 1; i < len(suggestions); i++ {
+		for j := i; j > 0 && suggestions[j].Similarity > suggestions[j-1].Similarity; j-- {
+			suggestions[j], suggestions[j-1] = suggestions[j-1], suggestions[j]
+		}
+	}
+
+	// Truncate to top maxLinks.
+	if len(suggestions) > maxLinks {
+		suggestions = suggestions[:maxLinks]
 	}
 
 	return suggestions
