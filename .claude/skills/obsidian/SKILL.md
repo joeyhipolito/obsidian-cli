@@ -257,6 +257,44 @@ obsidian resurface "<mission topic>" --json --limit 5
 ```
 Parse the `results` array and prepend titles + snippets to the mission prompt as "Related past notes:".
 
+### Promote (Cluster Detection)
+
+Detect clusters of related notes by tag overlap and semantic similarity, then merge selected clusters into a single canonical note. Source notes are archived with a `promoted-to` link.
+
+```bash
+# Detect clusters and interactively select which to promote
+obsidian promote
+
+# Preview discovered clusters without modifying anything
+obsidian promote --dry-run
+
+# Machine-readable cluster output (no promotion)
+obsidian promote --json
+```
+
+**Cluster detection algorithm:**
+1. Tag Jaccard similarity (threshold: 0.25) — notes sharing ≥25% of their combined tag set are linked
+2. Semantic cosine similarity (threshold: 0.80) — notes with similar embeddings are linked (requires `obsidian index` first)
+3. Connected components with ≥3 notes form a cluster
+
+**Promotion flow:**
+- A canonical note is created in `Notes/` merging all source bodies
+- Source notes gain a `promoted-to: [[canonical]]` frontmatter link and move to `Archive/`
+- No notes are deleted — all content is preserved
+
+**Canonical note frontmatter:**
+```yaml
+title: <derived from most-common tag or first note title>
+type: note
+status: active
+created: <today>
+promoted-from:
+  - '[[source-1]]'
+  - '[[source-2]]'
+tags:
+  - <merged unique tags>
+```
+
 ### Index
 
 Build or update the search index. Required before semantic search works.
@@ -288,6 +326,41 @@ obsidian doctor --json
 - Vault path existence
 - Search index (note count, file size)
 - Inbox backlog (pending triage count, age of oldest note)
+
+### Auto-Capture (Via Workflow Outputs)
+
+Automatically pull in learnings, workspace artifacts, and scout intel from Via orchestrator workflows into the vault. Scans all three sources in one pass and deduplicates across runs.
+
+```bash
+# Capture all new items from all Via sources
+obsidian auto-capture
+
+# Only items from the last 7 days
+obsidian auto-capture --since 7d
+
+# Preview what would be captured without writing
+obsidian auto-capture --dry-run
+
+# Machine-readable output
+obsidian auto-capture --json
+```
+
+**Sources scanned:**
+
+| Source | Location | Vault destination |
+|---|---|---|
+| Learnings | `~/.via/learnings.db` | `Learnings/{domain}/{type}-{id}.md` |
+| Workspace artifacts | `~/.via/workspaces/` | `Captures/Workspaces/{id}.md` |
+| Scout intel | `~/.scout/intel/` | `Intel/{topic}/{slug}.md` |
+
+**Deduplication:** Each run is idempotent — already-captured items are skipped using `~/.obsidian/ingest-state.json`. Running `obsidian ingest --source learnings` and `obsidian auto-capture` share the same dedup state, so notes are never duplicated.
+
+**Missing sources** are non-fatal: if `~/.via/learnings.db` or `~/.scout/intel/` don't exist, those sources are skipped and reported as warnings in the output.
+
+**Cron setup** (capture every hour):
+```
+0 * * * * /usr/local/bin/obsidian auto-capture --since 2h --json 2>&1
+```
 
 ## Configuration
 
@@ -331,6 +404,18 @@ Or use environment variables: `OBSIDIAN_VAULT_PATH`, `GEMINI_API_KEY`
 
 **User**: "read my personal context"
 **Action**: `obsidian read "System/Personal Context — Joey Hipolito"`
+
+**User**: "capture my via workflow outputs" / "pull in my orchestrator learnings"
+**Action**: `obsidian auto-capture`
+
+**User**: "what would auto-capture pull in from the last week?"
+**Action**: `obsidian auto-capture --since 7d --dry-run`
+
+**User**: "find related notes and merge them" / "promote my captures into canonical notes"
+**Action**: `obsidian promote`
+
+**User**: "show me which notes could be promoted without changing anything"
+**Action**: `obsidian promote --dry-run`
 
 **User**: "is my obsidian setup working?"
 **Action**: `obsidian doctor`

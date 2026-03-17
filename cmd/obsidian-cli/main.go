@@ -113,7 +113,7 @@ func run() error {
 		return cmd.ConfigureCmd()
 	case "doctor":
 		return cmd.DoctorCmd(jsonOutput)
-	case "read", "append", "capture", "create", "list", "search", "index", "sync", "enrich", "maintain", "ingest", "triage", "resurface":
+	case "read", "append", "capture", "create", "list", "search", "index", "sync", "enrich", "maintain", "ingest", "triage", "resurface", "auto-capture", "promote":
 		// handled below after vault resolution
 	default:
 		return fmt.Errorf("unknown command: %s\n\nRun 'obsidian --help' for usage", subcommand)
@@ -183,6 +183,19 @@ func run() error {
 
 	case "resurface":
 		return handleResurfaceCommand(vaultPath, filteredArgs, jsonOutput)
+
+	case "auto-capture":
+		return cmd.AutoCaptureCmd(vaultPath, cmd.AutoCaptureOptions{
+			Since:      ingestSince,
+			DryRun:     dryRun,
+			JSONOutput: jsonOutput,
+		})
+
+	case "promote":
+		return cmd.PromoteCmd(vaultPath, cmd.PromoteOptions{
+			DryRun:     dryRun,
+			JSONOutput: jsonOutput,
+		})
 	}
 
 	return nil
@@ -457,6 +470,12 @@ COMMANDS:
                             --limit N        Max results (default 5)
                             --older <dur>    Only notes older than duration (default 7d)
                             --random         Surface random old notes for serendipitous rediscovery
+    auto-capture            Capture learnings, workspace artifacts, and scout intel into vault
+                            --since <duration>   Limit lookback window (e.g. 7d, 24h, 2w)
+                            --dry-run            Preview what would be captured
+    promote                 Detect clusters of related notes and merge into canonical notes
+                            --dry-run            Preview clusters without modifying anything
+                            --json               Machine-readable cluster output
     configure               Set up API key and vault path
     configure show          Show current configuration
     doctor                  Validate installation and configuration
@@ -507,6 +526,13 @@ EXAMPLES:
     obsidian resurface "golang patterns" --older 14d --limit 3
     obsidian resurface --random                     # Random old note for serendipitous rediscovery
     obsidian resurface --random --older 30d --json  # Random old notes as JSON
+    obsidian auto-capture                           # Capture all via workflow outputs
+    obsidian auto-capture --since 7d               # Only items from the last 7 days
+    obsidian auto-capture --dry-run                 # Preview what would be captured
+    obsidian auto-capture --json                    # Machine-readable output
+    obsidian promote                                # Detect clusters, interactively promote
+    obsidian promote --dry-run                      # Preview clusters without writing
+    obsidian promote --json                         # Machine-readable cluster output
     obsidian doctor                                 # Check setup
 
 CRON SETUP (run triage hourly, only emails on activity):

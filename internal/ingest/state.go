@@ -17,6 +17,8 @@ type State struct {
 	Scout map[string]bool `json:"scout"`
 	// Learnings maps learning ID -> bool (ingested)
 	Learnings map[string]bool `json:"learnings"`
+	// Workspaces maps workspace ID -> bool (captured via auto-capture)
+	Workspaces map[string]bool `json:"workspaces"`
 }
 
 // statePath returns the full path to the ingest state file.
@@ -36,8 +38,9 @@ func LoadState() (*State, error) {
 	}
 
 	s := &State{
-		Scout:     make(map[string]bool),
-		Learnings: make(map[string]bool),
+		Scout:      make(map[string]bool),
+		Learnings:  make(map[string]bool),
+		Workspaces: make(map[string]bool),
 	}
 
 	data, err := os.ReadFile(path)
@@ -51,8 +54,9 @@ func LoadState() (*State, error) {
 	if err := json.Unmarshal(data, s); err != nil {
 		// Corrupt state — start fresh
 		return &State{
-			Scout:     make(map[string]bool),
-			Learnings: make(map[string]bool),
+			Scout:      make(map[string]bool),
+			Learnings:  make(map[string]bool),
+			Workspaces: make(map[string]bool),
 		}, nil
 	}
 
@@ -61,6 +65,9 @@ func LoadState() (*State, error) {
 	}
 	if s.Learnings == nil {
 		s.Learnings = make(map[string]bool)
+	}
+	if s.Workspaces == nil {
+		s.Workspaces = make(map[string]bool)
 	}
 
 	return s, nil
@@ -108,4 +115,14 @@ func (s *State) HasScout(key string) bool {
 // HasLearning returns true if the learning was already ingested.
 func (s *State) HasLearning(id string) bool {
 	return s.Learnings[id]
+}
+
+// MarkWorkspace marks a workspace as captured.
+func (s *State) MarkWorkspace(id string) {
+	s.Workspaces[id] = true
+}
+
+// HasWorkspace returns true if the workspace was already captured.
+func (s *State) HasWorkspace(id string) bool {
+	return s.Workspaces[id]
 }
