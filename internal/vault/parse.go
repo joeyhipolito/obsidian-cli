@@ -152,15 +152,18 @@ func parseFrontmatterYAML(fm string) map[string]any {
 		}
 
 		// Remove surrounding quotes
+		wasQuoted := false
 		if len(value) >= 2 {
 			if (value[0] == '"' && value[len(value)-1] == '"') ||
 				(value[0] == '\'' && value[len(value)-1] == '\'') {
 				value = value[1 : len(value)-1]
+				wasQuoted = true
 			}
 		}
 
 		// Handle inline lists: [item1, item2]
-		if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		// Skip if value was explicitly quoted — quoted values are always strings.
+		if !wasQuoted && strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
 			inner := value[1 : len(value)-1]
 			if inner == "" {
 				result[key] = []string{}
