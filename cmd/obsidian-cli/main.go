@@ -113,7 +113,7 @@ func run() error {
 		return cmd.ConfigureCmd()
 	case "doctor":
 		return cmd.DoctorCmd(jsonOutput)
-	case "read", "append", "capture", "create", "list", "search", "index", "sync", "enrich", "maintain", "ingest", "triage":
+	case "read", "append", "capture", "create", "list", "search", "index", "sync", "enrich", "maintain", "ingest", "triage", "resurface":
 		// handled below after vault resolution
 	default:
 		return fmt.Errorf("unknown command: %s\n\nRun 'obsidian --help' for usage", subcommand)
@@ -180,6 +180,9 @@ func run() error {
 
 	case "triage":
 		return handleTriageCommand(vaultPath, filteredArgs, dryRun, jsonOutput)
+
+	case "resurface":
+		return handleResurfaceCommand(vaultPath, filteredArgs, jsonOutput)
 	}
 
 	return nil
@@ -344,6 +347,42 @@ func handleTriageCommand(vaultPath string, args []string, dryRun, jsonOutput boo
 	return cmd.TriageCmd(vaultPath, opts)
 }
 
+// handleResurfaceCommand parses and executes the resurface command.
+func handleResurfaceCommand(vaultPath string, args []string, jsonOutput bool) error {
+	opts := cmd.ResurfaceOptions{
+		JSONOutput: jsonOutput,
+	}
+	var queryParts []string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--random":
+			opts.Random = true
+		case "--limit":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--limit requires an argument")
+			}
+			n, err := parseInt(args[i+1])
+			if err != nil {
+				return fmt.Errorf("--limit requires a number")
+			}
+			opts.Limit = n
+			i++
+		case "--older":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--older requires an argument (e.g. 7d, 14d, 24h)")
+			}
+			opts.OlderThan = args[i+1]
+			i++
+		default:
+			queryParts = append(queryParts, args[i])
+		}
+	}
+
+	query := strings.Join(queryParts, " ")
+	return cmd.ResurfaceCmd(vaultPath, query, opts)
+}
+
 // handleSearchCommand parses and executes the search command.
 func handleSearchCommand(vaultPath string, args []string, jsonOutput bool) error {
 	mode := ""
@@ -414,6 +453,10 @@ COMMANDS:
                             --older <dur>    Filter to notes older than duration (e.g. 7d, 24h)
                             --dry-run        Preview --auto without writing
                             --quiet          Suppress output when inbox is clear (cron-friendly)
+    resurface <query>       Surface old notes relevant to a query
+                            --limit N        Max results (default 5)
+                            --older <dur>    Only notes older than duration (default 7d)
+                            --random         Surface random old notes for serendipitous rediscovery
     configure               Set up API key and vault path
     configure show          Show current configuration
     doctor                  Validate installation and configuration
@@ -460,6 +503,10 @@ EXAMPLES:
     obsidian triage --auto --dry-run                # Preview triage without writing
     obsidian triage --auto --json                   # Structured output
     obsidian triage --auto --quiet                  # Cron-friendly: no output when inbox is clear
+    obsidian resurface "golang patterns"            # Find old notes about golang patterns
+    obsidian resurface "golang patterns" --older 14d --limit 3
+    obsidian resurface --random                     # Random old note for serendipitous rediscovery
+    obsidian resurface --random --older 30d --json  # Random old notes as JSON
     obsidian doctor                                 # Check setup
 
 CRON SETUP (run triage hourly, only emails on activity):

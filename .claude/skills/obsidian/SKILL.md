@@ -200,6 +200,63 @@ obsidian search "query" --mode semantic
 obsidian search "query" --json
 ```
 
+### Resurface
+
+Surface old notes that match a query (hybrid search) or are randomly selected. Useful for injecting relevant past knowledge into mission context.
+
+```bash
+# Find old notes relevant to a query (default: older than 7 days, top 5)
+obsidian resurface "query terms"
+
+# Narrow by age and result count
+obsidian resurface "golang patterns" --older 14d --limit 3
+
+# Random old note for serendipitous rediscovery
+obsidian resurface --random
+
+# Random with custom age threshold
+obsidian resurface --random --older 30d --limit 10
+
+# JSON output — suitable for injection into orchestrator mission context
+obsidian resurface "query" --json
+obsidian resurface --random --json
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--limit N` | 5 | Maximum number of results to return |
+| `--older <duration>` | 7d | Only include notes older than this (e.g. `7d`, `14d`, `2w`, `24h`) |
+| `--random` | — | Return randomly selected old notes instead of query-based results |
+| `--json` | — | Machine-readable output with path, title, snippet, score, mod_time, age_days |
+
+**JSON output format:**
+```json
+{
+  "query": "golang patterns",
+  "mode": "query",
+  "older_than": "7d",
+  "results": [
+    {
+      "path": "Notes/golang-concurrency.md",
+      "title": "Go Concurrency Patterns",
+      "snippet": "…goroutines and channels…",
+      "score": 0.0162,
+      "mod_time": 1740000000,
+      "age_days": 42
+    }
+  ]
+}
+```
+
+**Orchestrator integration:**
+To inject relevant vault context at mission start, call:
+```bash
+obsidian resurface "<mission topic>" --json --limit 5
+```
+Parse the `results` array and prepend titles + snippets to the mission prompt as "Related past notes:".
+
 ### Index
 
 Build or update the search index. Required before semantic search works.

@@ -412,6 +412,64 @@ func IndexDBPath(vaultPath string) string {
 	return vaultPath + "/.obsidian/search.db"
 }
 
+// GetModTimes returns mod_time for each of the given paths.
+// Paths not found in the index are omitted from the result.
+func (s *Store) GetModTimes(paths []string) (map[string]int64, error) {
+	if len(paths) == 0 {
+		return map[string]int64{}, nil
+	}
+
+	placeholders := strings.Repeat("?,", len(paths))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	args := make([]any, len(paths))
+	for i, p := range paths {
+		args[i] = p
+	}
+
+	rows, err := s.db.Query(
+		"SELECT path, mod_time FROM notes WHERE path IN ("+placeholders+")",
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]int64, len(paths))
+	for rows.Next() {
+		var path string
+		var modTime int64
+		if err := rows.Scan(&path, &modTime); err != nil {
+			return nil, err
+		}
+		result[path] = modTime
+	}
+	return result, rows.Err()
+}
+
+// RandomOldNotes returns up to limit randomly selected notes with mod_time < olderThan.
+func (s *Store) RandomOldNotes(olderThan int64, limit int) ([]NoteRow, error) {
+	rows, err := s.db.Query(
+		"SELECT path, title, body, mod_time FROM notes WHERE mod_time < ? AND mod_time > 0 ORDER BY RANDOM() LIMIT ?",
+		olderThan, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var notes []NoteRow
+	for rows.Next() {
+		var n NoteRow
+		if err := rows.Scan(&n.Path, &n.Title, &n.Body, &n.ModTime); err != nil {
+			return nil, err
+		}
+		notes = append(notes, n)
+	}
+	return notes, rows.Err()
+}
+
 // BuildSearchText creates a combined text for embedding from note fields.
 func BuildSearchText(title, tags, headings, body string) string {
 	var parts []string
