@@ -295,11 +295,22 @@ func applyLinkSuggestions(vaultPath string, suggestions []LinkSuggestion) int {
 		}
 
 		// Append to Related Notes section or add one
-		appendText := "\n" + strings.Join(linkLines, "\n") + "\n"
-		if strings.Contains(content, "## Related Notes") {
-			content += appendText
+		newLinks := strings.Join(linkLines, "\n")
+		if idx := strings.Index(content, "## Related Notes"); idx >= 0 {
+			sectionStart := idx + len("## Related Notes")
+			rest := content[sectionStart:]
+			if nextIdx := strings.Index(rest, "\n##"); nextIdx >= 0 {
+				// Insert before the next heading; step back past any blank line
+				insertAt := sectionStart + nextIdx
+				if insertAt > 0 && content[insertAt-1] == '\n' {
+					insertAt--
+				}
+				content = content[:insertAt] + "\n" + newLinks + content[insertAt:]
+			} else {
+				content += "\n" + newLinks + "\n"
+			}
 		} else {
-			content += "\n## Related Notes\n" + strings.Join(linkLines, "\n") + "\n"
+			content += "\n## Related Notes\n" + newLinks + "\n"
 		}
 
 		if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
