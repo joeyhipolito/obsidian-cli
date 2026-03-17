@@ -1,11 +1,26 @@
 package cmd
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/joeyhipolito/obsidian-cli/internal/index"
 	"github.com/joeyhipolito/obsidian-cli/internal/vault"
 )
+
+// mockLLMClassifier is a test double for LLMClassifier.
+type mockLLMClassifier struct {
+	result LLMClassifyResult
+	err    error
+}
+
+func (m *mockLLMClassifier) Classify(_ context.Context, _ string) (LLMClassifyResult, error) {
+	return m.result, m.err
+}
 
 func TestClassifyNoteType(t *testing.T) {
 	tests := []struct {
@@ -244,6 +259,207 @@ func TestEnrichSingleNoteFromRows_CapsAtFive(t *testing.T) {
 	got := enrichSingleNoteFromRows(notes, target)
 	if len(got) != 5 {
 		t.Errorf("expected at most 5 suggestions, got %d", len(got))
+	}
+}
+
+func TestNoteTypeEnum(t *testing.T) {
+	types := []NoteType{NoteTypeFleeting, NoteTypeTask, NoteTypeReference, NoteTypeIdea, NoteTypeNote}
+	for _, nt := range types {
+		if !isValidNoteType(nt) {
+			t.Errorf("isValidNoteType(%q) = false, want true", nt)
+		}
+	}
+	if isValidNoteType("bogus") {
+		t.Error("isValidNoteType(\"bogus\") = true, want false")
+	}
+}
+
+func TestClassifyWithLLM_HighConfidence(t *testing.T) {
+	parsed := &vault.Note{
+		Frontmatter: map[string]any{"type": "fleeting"},
+		Body:        "Some task-like content",
+	}
+	llm := &mockLLMClassifier{
+		result: LLMClassifyResult{Type: NoteTypeTask, Confidence: 0.9, Entities: []string{"project"}},
+	}
+	got, entities := classifyWithLLM(context.Background(), parsed, llm)
+	if got != "task" {
+		t.Errorf("classifyWithLLM() type = %q, want %q", got, "task")
+	}
+	if len(entities) != 1 || entities[0] != "project" {
+		t.Errorf("classifyWithLLM() entities = %v, want [project]", entities)
+	}
+}
+
+func TestClassifyWithLLM_LowConfidence_FallsBackToRegex(t *testing.T) {
+	parsed := &vault.Note{
+		Frontmatter: map[string]any{"type": "fleeting"},
+		Body:        "- [ ] buy milk\n",
+	}
+	llm := &mockLLMClassifier{
+		result: LLMClassifyResult{Type: NoteTypeIdea, Confidence: 0.3},
+	}
+	got, entities := classifyWithLLM(context.Background(), parsed, llm)
+	// Regex sees a checkbox → "task"
+	if got != "task" {
+		t.Errorf("classifyWithLLM() type = %q, want %q (regex fallback)", got, "task")
+	}
+	if len(entities) != 0 {
+		t.Errorf("classifyWithLLM() entities = %v, want nil on fallback", entities)
+	}
+}
+
+func TestClassifyWithLLM_NilClassifier_UsesRegex(t *testing.T) {
+	parsed := &vault.Note{
+		Frontmatter: map[string]any{"type": "fleeting"},
+		Body:        "https://golang.org is great",
+	}
+	got, entities := classifyWithLLM(context.Background(), parsed, nil)
+	if got != "reference" {
+		t.Errorf("classifyWithLLM() type = %q, want %q", got, "reference")
+	}
+	if len(entities) != 0 {
+		t.Errorf("classifyWithLLM() entities should be nil without LLM, got %v", entities)
+	}
+}
+
+func TestClassifyWithLLM_LLMError_FallsBackToRegex(t *testing.T) {
+	parsed := &vault.Note{
+		Frontmatter: map[string]any{"type": "fleeting"},
+		Body:        "a simple idea",
+	}
+	llm := &mockLLMClassifier{err: context.DeadlineExceeded}
+	got, _ := classifyWithLLM(context.Background(), parsed, llm)
+	if got != "idea" {
+		t.Errorf("classifyWithLLM() on error = %q, want %q", got, "idea")
+	}
+}
+
+func TestClassifyWithLLM_FleetingFromLLM_FallsBackToRegex(t *testing.T) {
+	// LLM returning "fleeting" means it has no opinion — defer to regex.
+	parsed := &vault.Note{
+		Frontmatter: map[string]any{"type": "fleeting"},
+		Body:        "- [ ] send invoice",
+	}
+	llm := &mockLLMClassifier{
+		result: LLMClassifyResult{Type: NoteTypeFleeting, Confidence: 0.8},
+	}
+	got, _ := classifyWithLLM(context.Background(), parsed, llm)
+	if got != "task" {
+		t.Errorf("classifyWithLLM() fleeting LLM result = %q, want %q (regex)", got, "task")
+	}
+}
+
+func TestClassifyWithLLM_InvalidTypeFromLLM_FallsBackToRegex(t *testing.T) {
+	parsed := &vault.Note{
+		Frontmatter: map[string]any{"type": "fleeting"},
+		Body:        "a simple idea",
+	}
+	llm := &mockLLMClassifier{
+		result: LLMClassifyResult{Type: "unknown-type", Confidence: 0.95},
+	}
+	got, _ := classifyWithLLM(context.Background(), parsed, llm)
+	if got != "idea" {
+		t.Errorf("classifyWithLLM() invalid LLM type = %q, want %q (regex)", got, "idea")
+	}
+}
+
+func TestMatchEntitiesAgainstVault(t *testing.T) {
+	vaultDir := t.TempDir()
+	notesDir := filepath.Join(vaultDir, "Notes")
+	if err := os.MkdirAll(notesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"golang-error-handling.md", "concurrency.md", "unrelated.md"} {
+		if err := os.WriteFile(filepath.Join(notesDir, name), []byte("# "+name), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	entities := []string{"Golang Error Handling", "Concurrency", "NonExistent"}
+	matches := matchEntitiesAgainstVault(vaultDir, entities)
+
+	if len(matches) != 2 {
+		t.Fatalf("matchEntitiesAgainstVault() = %v (len %d), want 2 matches", matches, len(matches))
+	}
+	// Order may vary; check presence.
+	matchSet := make(map[string]bool)
+	for _, m := range matches {
+		matchSet[m] = true
+	}
+	for _, want := range []string{"golang-error-handling", "concurrency"} {
+		if !matchSet[want] {
+			t.Errorf("matchEntitiesAgainstVault() missing %q, got %v", want, matches)
+		}
+	}
+}
+
+func TestMatchEntitiesAgainstVault_Empty(t *testing.T) {
+	got := matchEntitiesAgainstVault(t.TempDir(), nil)
+	if got != nil {
+		t.Errorf("expected nil for empty entities, got %v", got)
+	}
+}
+
+func TestAppendToCanonical(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "canonical-*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString("# Existing Note\n\nOriginal content.\n")
+	f.Close()
+
+	now := time.Date(2026, 3, 17, 0, 0, 0, 0, time.UTC)
+	if err := appendToCanonical(f.Name(), "New idea here.", now); err != nil {
+		t.Fatalf("appendToCanonical() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(f.Name())
+	content := string(data)
+
+	if !strings.Contains(content, "Original content.") {
+		t.Error("appendToCanonical() clobbered existing content")
+	}
+	if !strings.Contains(content, "New idea here.") {
+		t.Error("appendToCanonical() did not append new body")
+	}
+	if !strings.Contains(content, "2026-03-17") {
+		t.Error("appendToCanonical() missing date stamp")
+	}
+	if !strings.Contains(content, "---") {
+		t.Error("appendToCanonical() missing divider")
+	}
+}
+
+func TestAppendToCanonical_NoTrailingNewline(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "canonical-*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write content without trailing newline.
+	_, _ = f.WriteString("# Note")
+	f.Close()
+
+	now := time.Date(2026, 3, 17, 0, 0, 0, 0, time.UTC)
+	if err := appendToCanonical(f.Name(), "appended", now); err != nil {
+		t.Fatalf("appendToCanonical() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(f.Name())
+	if !strings.Contains(string(data), "appended") {
+		t.Error("content not appended")
+	}
+}
+
+func TestContainsStr(t *testing.T) {
+	if !containsStr([]string{"a", "b", "c"}, "b") {
+		t.Error("expected true for existing element")
+	}
+	if containsStr([]string{"a", "b"}, "z") {
+		t.Error("expected false for missing element")
+	}
+	if containsStr(nil, "x") {
+		t.Error("expected false for nil slice")
 	}
 }
 

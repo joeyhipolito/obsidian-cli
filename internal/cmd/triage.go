@@ -1,7 +1,12 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +17,140 @@ import (
 	"github.com/joeyhipolito/obsidian-cli/internal/output"
 	"github.com/joeyhipolito/obsidian-cli/internal/vault"
 )
+
+// NoteType is the classification of a vault note.
+type NoteType string
+
+const (
+	NoteTypeFleeting  NoteType = "fleeting"
+	NoteTypeTask      NoteType = "task"
+	NoteTypeReference NoteType = "reference"
+	NoteTypeIdea      NoteType = "idea"
+	NoteTypeNote      NoteType = "note"
+)
+
+// isValidNoteType reports whether t is a known NoteType.
+func isValidNoteType(t NoteType) bool {
+	switch t {
+	case NoteTypeFleeting, NoteTypeTask, NoteTypeReference, NoteTypeIdea, NoteTypeNote:
+		return true
+	}
+	return false
+}
+
+// llmConfidenceThreshold is the minimum confidence for an LLM classification
+// to override the regex fallback.
+const llmConfidenceThreshold = 0.75
+
+// LLMClassifyResult holds the structured output from an LLM classifier.
+type LLMClassifyResult struct {
+	Type       NoteType `json:"type"`
+	Confidence float64  `json:"confidence"`
+	Entities   []string `json:"entities"`
+}
+
+// LLMClassifier classifies a note's text content.
+// Implementations may be real API clients or mocks for testing.
+type LLMClassifier interface {
+	Classify(ctx context.Context, content string) (LLMClassifyResult, error)
+}
+
+// HaikuClassifier classifies notes using Claude Haiku via the Anthropic Messages API.
+type HaikuClassifier struct {
+	apiKey     string
+	httpClient *http.Client
+}
+
+// NewHaikuClassifier returns a classifier backed by Claude Haiku.
+// Returns nil when apiKey is empty so callers can use nil as a "no LLM" sentinel.
+func NewHaikuClassifier(apiKey string) *HaikuClassifier {
+	if apiKey == "" {
+		return nil
+	}
+	return &HaikuClassifier{
+		apiKey:     apiKey,
+		httpClient: &http.Client{Timeout: 15 * time.Second},
+	}
+}
+
+// anthropicMessagesResponse is the JSON shape returned by the Anthropic Messages API.
+type anthropicMessagesResponse struct {
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+	Error *struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+const classifySystemPrompt = `Classify the note below. Respond with JSON only — no prose, no code fences.
+
+Schema: {"type":"task"|"reference"|"idea"|"note"|"fleeting","confidence":0.0–1.0,"entities":["…up to 5 key topics…"]}
+
+Rules:
+- task: actionable items, checkboxes, TODOs, follow-ups
+- reference: URLs, citations, bookmarks, external sources
+- note: structured content with multiple headings or sections
+- idea: single concept, insight, or brainstorm
+- fleeting: unclear, fragmentary, or unclassifiable capture
+- confidence: how sure you are (1.0 = certain)
+- entities: key named topics that may correspond to existing vault notes`
+
+// Classify sends the note content to Claude Haiku and returns a structured result.
+func (h *HaikuClassifier) Classify(ctx context.Context, content string) (LLMClassifyResult, error) {
+	prompt := classifySystemPrompt + "\n\nNote:\n" + content
+
+	reqBody := map[string]any{
+		"model":      "claude-haiku-4-5-20251001",
+		"max_tokens": 256,
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+	}
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return LLMClassifyResult{}, fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		"https://api.anthropic.com/v1/messages", bytes.NewReader(jsonBody))
+	if err != nil {
+		return LLMClassifyResult{}, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", h.apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return LLMClassifyResult{}, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return LLMClassifyResult{}, fmt.Errorf("read response: %w", err)
+	}
+
+	var apiResp anthropicMessagesResponse
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return LLMClassifyResult{}, fmt.Errorf("decode response: %w", err)
+	}
+	if apiResp.Error != nil {
+		return LLMClassifyResult{}, fmt.Errorf("API error: %s", apiResp.Error.Message)
+	}
+	if len(apiResp.Content) == 0 || apiResp.Content[0].Type != "text" {
+		return LLMClassifyResult{}, fmt.Errorf("unexpected response format")
+	}
+
+	var result LLMClassifyResult
+	if err := json.Unmarshal([]byte(apiResp.Content[0].Text), &result); err != nil {
+		return LLMClassifyResult{}, fmt.Errorf("parse JSON in response: %w", err)
+	}
+	return result, nil
+}
 
 // TriageOptions holds flags for the triage command.
 type TriageOptions struct {
@@ -39,6 +178,7 @@ type ProcessedNote struct {
 	NoteType   string   `json:"note_type"`
 	LinksAdded []string `json:"links_added,omitempty"`
 	DryRun     bool     `json:"dry_run,omitempty"`
+	Appended   bool     `json:"appended,omitempty"` // true when content was appended to canonical
 }
 
 // TriageSummary holds aggregate counts for the triage run.
@@ -142,8 +282,14 @@ func TriageCmd(vaultPath string, opts TriageOptions) error {
 			}
 		}
 
+		// Create Haiku classifier if ANTHROPIC_API_KEY is set; nil → regex fallback.
+		var llm LLMClassifier
+		if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
+			llm = NewHaikuClassifier(apiKey)
+		}
+
 		for _, pending := range result.Pending {
-			processed, err := triageNote(vaultPath, pending, store, opts.DryRun, now)
+			processed, err := triageNote(vaultPath, pending, store, llm, opts.DryRun, now)
 			if err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", pending.Path, err))
 				result.Summary.Errors++
@@ -174,7 +320,8 @@ func TriageCmd(vaultPath string, opts TriageOptions) error {
 }
 
 // triageNote classifies, enriches, rewrites frontmatter, and moves a single note.
-func triageNote(vaultPath string, pending PendingNote, store *index.Store, dryRun bool, now time.Time) (ProcessedNote, error) {
+// When llm is non-nil and returns a confident result, it overrides the regex classifier.
+func triageNote(vaultPath string, pending PendingNote, store *index.Store, llm LLMClassifier, dryRun bool, now time.Time) (ProcessedNote, error) {
 	fullPath := filepath.Join(vaultPath, pending.Path)
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
@@ -183,16 +330,23 @@ func triageNote(vaultPath string, pending PendingNote, store *index.Store, dryRu
 
 	parsed := vault.ParseNote(string(data))
 
-	// Step 1: Classify note type from content.
-	noteType := classifyNoteType(parsed)
+	// Step 1: Classify note type — LLM when available, regex fallback otherwise.
+	ctx := context.Background()
+	noteType, llmEntities := classifyWithLLM(ctx, parsed, llm)
 
-	// Step 2: Find wikilink suggestions via index cosine similarity (optional).
+	// Step 2: Find wikilink suggestions.
+	// Entity-based matches (from LLM) take priority; cosine-similarity fills the rest.
 	var linksAdded []string
+	entityLinks := matchEntitiesAgainstVault(vaultPath, llmEntities)
+	linksAdded = append(linksAdded, entityLinks...)
+
 	if store != nil {
-		suggestions := enrichSingleNote(store, pending.Path)
-		for _, s := range suggestions {
+		for _, s := range enrichSingleNote(store, pending.Path) {
 			toName := strings.TrimSuffix(filepath.Base(s.To), ".md")
-			linksAdded = append(linksAdded, toName)
+			// Avoid duplicates from entity matching.
+			if !containsStr(linksAdded, toName) {
+				linksAdded = append(linksAdded, toName)
+			}
 		}
 	}
 
@@ -212,18 +366,24 @@ func triageNote(vaultPath string, pending PendingNote, store *index.Store, dryRu
 		}, nil
 	}
 
-	// Step 5: Write to new path (deconflict if already exists).
+	// Step 5: Write to destination.
+	// If a canonical note already exists at the destination, append to it instead
+	// of creating a duplicate or deconflicting with a timestamp suffix.
 	targetFull := filepath.Join(vaultPath, toPath)
+	appended := false
 	if _, err := os.Stat(targetFull); err == nil {
-		toPath = deconflictPath(toPath)
-		targetFull = filepath.Join(vaultPath, toPath)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(targetFull), 0755); err != nil {
-		return ProcessedNote{}, fmt.Errorf("creating target directory: %w", err)
-	}
-	if err := os.WriteFile(targetFull, []byte(newContent), 0644); err != nil {
-		return ProcessedNote{}, fmt.Errorf("writing triaged note: %w", err)
+		// Canonical exists — append the new body to it.
+		if err := appendToCanonical(targetFull, parsed.Body, now); err != nil {
+			return ProcessedNote{}, fmt.Errorf("appending to canonical: %w", err)
+		}
+		appended = true
+	} else {
+		if err := os.MkdirAll(filepath.Dir(targetFull), 0755); err != nil {
+			return ProcessedNote{}, fmt.Errorf("creating target directory: %w", err)
+		}
+		if err := os.WriteFile(targetFull, []byte(newContent), 0644); err != nil {
+			return ProcessedNote{}, fmt.Errorf("writing triaged note: %w", err)
+		}
 	}
 
 	// Step 6: Remove original.
@@ -236,10 +396,106 @@ func triageNote(vaultPath string, pending PendingNote, store *index.Store, dryRu
 		ToPath:     toPath,
 		NoteType:   noteType,
 		LinksAdded: linksAdded,
+		Appended:   appended,
 	}, nil
 }
 
-// classifyNoteType determines the best note type for a parsed note.
+// classifyWithLLM classifies a note using the LLM when available and confident.
+// Falls back to regex (classifyNoteType) when llm is nil, returns an error, or
+// has confidence below llmConfidenceThreshold. Also returns extracted entities
+// from the LLM for vault matching (nil on regex fallback).
+func classifyWithLLM(ctx context.Context, parsed *vault.Note, llm LLMClassifier) (noteType string, entities []string) {
+	if llm != nil {
+		content := buildLLMContent(parsed)
+		result, err := llm.Classify(ctx, content)
+		if err == nil &&
+			result.Confidence >= llmConfidenceThreshold &&
+			isValidNoteType(result.Type) &&
+			result.Type != NoteTypeFleeting {
+			return string(result.Type), result.Entities
+		}
+	}
+	return classifyNoteType(parsed), nil
+}
+
+// buildLLMContent assembles the text sent to the LLM for classification.
+// Includes salient frontmatter fields followed by the note body.
+func buildLLMContent(parsed *vault.Note) string {
+	var sb strings.Builder
+	if title := frontmatterString(parsed.Frontmatter, "title"); title != "" {
+		fmt.Fprintf(&sb, "title: %s\n", title)
+	}
+	if source := frontmatterString(parsed.Frontmatter, "source"); source != "" {
+		fmt.Fprintf(&sb, "source: %s\n", source)
+	}
+	if sb.Len() > 0 {
+		sb.WriteByte('\n')
+	}
+	sb.WriteString(parsed.Body)
+	return sb.String()
+}
+
+// matchEntitiesAgainstVault finds vault notes whose slugified filenames match
+// any of the given entity names. Returns note display names (without .md extension).
+func matchEntitiesAgainstVault(vaultPath string, entities []string) []string {
+	if len(entities) == 0 {
+		return nil
+	}
+
+	notes, err := vault.ListNotes(vaultPath, "")
+	if err != nil {
+		return nil
+	}
+
+	// Build a set of slugified entity names for O(1) lookup.
+	entitySlugs := make(map[string]bool, len(entities))
+	for _, e := range entities {
+		entitySlugs[slugify(e)] = true
+	}
+
+	var matches []string
+	seen := make(map[string]bool)
+	for _, n := range notes {
+		name := strings.TrimSuffix(filepath.Base(n.Path), ".md")
+		if entitySlugs[slugify(name)] && !seen[name] {
+			matches = append(matches, name)
+			seen[name] = true
+		}
+	}
+	return matches
+}
+
+// appendToCanonical appends the new body to an existing canonical note, separated
+// by a dated divider so the provenance of each append is clear.
+func appendToCanonical(destFull, newBody string, now time.Time) error {
+	existing, err := os.ReadFile(destFull)
+	if err != nil {
+		return err
+	}
+
+	var entry strings.Builder
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		entry.WriteByte('\n')
+	}
+	fmt.Fprintf(&entry, "\n---\n*Appended %s*\n\n%s\n",
+		now.Format("2006-01-02"),
+		strings.TrimSpace(newBody),
+	)
+
+	return os.WriteFile(destFull, append(existing, []byte(entry.String())...), 0644)
+}
+
+// containsStr reports whether s is in the slice.
+func containsStr(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyNoteType determines the best note type for a parsed note using regex rules.
 // Priority order:
 //  1. Existing non-fleeting type in frontmatter → preserve it.
 //  2. Task signals (checkbox, TODO) → "task".
@@ -572,6 +828,8 @@ func printTriageAutoReport(result TriageOutput, dryRun bool) {
 			prefix := "✓"
 			if p.DryRun {
 				prefix = "→"
+			} else if p.Appended {
+				prefix = "+"
 			}
 			line := fmt.Sprintf("  %s %s → %s (type: %s",
 				prefix,
@@ -581,6 +839,9 @@ func printTriageAutoReport(result TriageOutput, dryRun bool) {
 			)
 			if len(p.LinksAdded) > 0 {
 				line += ", links: " + strings.Join(p.LinksAdded, ", ")
+			}
+			if p.Appended {
+				line += ", appended to canonical"
 			}
 			line += ")"
 			fmt.Println(line)
